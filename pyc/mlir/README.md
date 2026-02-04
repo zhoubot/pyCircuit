@@ -7,7 +7,11 @@ This folder contains the MLIR-based implementation of the `pyc` dialect, along w
 
 ## Build
 
-This assumes an existing `~/llvm-project/build-mlir` containing MLIR.
+Recommended: build from the repo root via top-level `CMakeLists.txt` (see `README.md`).
+
+You can also build this subproject standalone if you already have an LLVM+MLIR build/install.
+
+This example assumes an existing `~/llvm-project/build-mlir` containing MLIR.
 
 ```bash
 cmake -G Ninja -S pyc/mlir -B pyc/mlir/build \

@@ -2,10 +2,21 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
-PYC_COMPILE="${ROOT_DIR}/pyc/mlir/build/bin/pyc-compile"
 
-if [[ ! -x "${PYC_COMPILE}" ]]; then
-  echo "error: missing ${PYC_COMPILE}" >&2
+if [[ -z "${PYC_COMPILE:-}" ]]; then
+  if [[ -x "${ROOT_DIR}/pyc/mlir/build/bin/pyc-compile" ]]; then
+    PYC_COMPILE="${ROOT_DIR}/pyc/mlir/build/bin/pyc-compile"
+  elif [[ -x "${ROOT_DIR}/build/bin/pyc-compile" ]]; then
+    PYC_COMPILE="${ROOT_DIR}/build/bin/pyc-compile"
+  elif command -v pyc-compile >/dev/null 2>&1; then
+    PYC_COMPILE="$(command -v pyc-compile)"
+  else
+    PYC_COMPILE=""
+  fi
+fi
+
+if [[ -z "${PYC_COMPILE}" || ! -x "${PYC_COMPILE}" ]]; then
+  echo "error: missing pyc-compile (PYC_COMPILE=${PYC_COMPILE:-<unset>})" >&2
   echo "Build MLIR tools first (see ${ROOT_DIR}/README.md)." >&2
   exit 1
 fi
@@ -25,7 +36,7 @@ emit_one() {
   local tmp_pyc
   tmp_pyc="$(mktemp -t "pycircuit.${name}.pyc")"
 
-  PYTHONPATH="${ROOT_DIR}/binding/python" python3 -m pycircuit.cli emit "${src}" -o "${tmp_pyc}"
+  PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="${ROOT_DIR}/binding/python" python3 -m pycircuit.cli emit "${src}" -o "${tmp_pyc}"
   "${PYC_COMPILE}" "${tmp_pyc}" --emit=verilog -o "${outdir}/${name}.sv"
   "${PYC_COMPILE}" "${tmp_pyc}" --emit=cpp -o "${outdir}/${name}.hpp"
 }

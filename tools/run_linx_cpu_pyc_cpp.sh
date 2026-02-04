@@ -63,13 +63,19 @@ EOF
   esac
 done
 
-PYC_COMPILE="${ROOT_DIR}/pyc/mlir/build/bin/pyc-compile"
+PYC_COMPILE="${PYC_COMPILE:-${ROOT_DIR}/pyc/mlir/build/bin/pyc-compile}"
 if [[ ! -x "${PYC_COMPILE}" ]]; then
-  echo "error: missing pyc-compile at ${PYC_COMPILE}" >&2
-  echo "build it with:" >&2
-  echo "  cmake -G Ninja -S pyc/mlir -B pyc/mlir/build -DMLIR_DIR=\$HOME/llvm-project/build-make/lib/cmake/mlir -DLLVM_DIR=\$HOME/llvm-project/build-make/lib/cmake/llvm" >&2
-  echo "  ninja -C pyc/mlir/build pyc-compile" >&2
-  exit 1
+  if [[ -x "${ROOT_DIR}/build/bin/pyc-compile" ]]; then
+    PYC_COMPILE="${ROOT_DIR}/build/bin/pyc-compile"
+  elif command -v pyc-compile >/dev/null 2>&1; then
+    PYC_COMPILE="$(command -v pyc-compile)"
+  else
+    echo "error: missing pyc-compile (tried: ${ROOT_DIR}/pyc/mlir/build/bin/pyc-compile, ${ROOT_DIR}/build/bin/pyc-compile, \$PATH)" >&2
+    echo "build it with:" >&2
+    echo "  cmake -G Ninja -S . -B build -DMLIR_DIR=... -DLLVM_DIR=..." >&2
+    echo "  ninja -C build pyc-compile" >&2
+    exit 1
+  fi
 fi
 
 WORK_DIR="$(mktemp -d -t linx_cpu_pyc.XXXXXX)"
@@ -79,17 +85,17 @@ cd "${ROOT_DIR}"
 
 if [[ -n "${ELF}" ]]; then
   MEMH="${WORK_DIR}/program.memh"
-  START_PC="$(python3 tools/linxisa/elf_to_memh.py "${ELF}" --text-base "${ELF_TEXT_BASE}" --data-base "${ELF_DATA_BASE}" --page-align "${ELF_PAGE_ALIGN}" -o "${MEMH}" --print-start)"
+  START_PC="$(PYTHONDONTWRITEBYTECODE=1 python3 tools/linxisa/elf_to_memh.py "${ELF}" --text-base "${ELF_TEXT_BASE}" --data-base "${ELF_DATA_BASE}" --page-align "${ELF_PAGE_ALIGN}" -o "${MEMH}" --print-start)"
   if [[ -z "${PYC_BOOT_PC:-}" ]]; then
     export PYC_BOOT_PC="${START_PC}"
   fi
 fi
 
-PYTHONPATH="${ROOT_DIR}/binding/python" python3 -m pycircuit.cli emit examples/linx_cpu_pyc/linx_cpu_pyc.py -o "${WORK_DIR}/linx_cpu_pyc.pyc"
+PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="${ROOT_DIR}/binding/python" python3 -m pycircuit.cli emit examples/linx_cpu_pyc/linx_cpu_pyc.py -o "${WORK_DIR}/linx_cpu_pyc.pyc"
 
 "${PYC_COMPILE}" "${WORK_DIR}/linx_cpu_pyc.pyc" --emit=cpp -o "${WORK_DIR}/linx_cpu_pyc_gen.hpp"
 
-clang++ -std=c++17 -O2 \
+"${CXX:-clang++}" -std=c++17 -O2 \
   -I "${ROOT_DIR}/include" \
   -I "${WORK_DIR}" \
   -o "${WORK_DIR}/tb_linx_cpu_pyc" \

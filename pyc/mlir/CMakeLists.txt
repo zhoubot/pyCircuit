@@ -5,6 +5,8 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+include(GNUInstallDirs)
+
 find_package(LLVM REQUIRED CONFIG)
 find_package(MLIR REQUIRED CONFIG)
 
@@ -120,3 +122,6 @@ target_link_libraries(pyc-compile PRIVATE
   MLIRTransforms
   LLVMSupport
 )
+
+# Install binaries for packaging / reuse.
+install(TARGETS pyc-opt pyc-compile RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}")

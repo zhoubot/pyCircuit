@@ -1,107 +1,155 @@
-# pyCircuit (prototype)
+# pyCircuit
 
-`pyCircuit` is a growing hardware construction + compilation project:
+`pyCircuit` is a Python-first hardware construction + compilation toolkit built around a small MLIR dialect (**PYC**).
+You write *sequential-looking* Python; the frontend emits `.pyc` (MLIR), MLIR passes canonicalize + fuse, and `pyc-compile`
+emits either:
 
-`Python frontend` → emits `PYC` MLIR (`*.pyc`) → MLIR passes → emit backends:
+- **SystemVerilog** (static RTL; strict ready/valid streaming)
+- **Header-only C++** (cycle/tick model; convenient for bring-up + debug)
 
-- `include/pyc/cpp/`: C++ templates for cycle-accurate models
-- `include/pyc/verilog/`: Verilog/SystemVerilog templates for RTL simulation
+Everything between Python and codegen stays **MLIR-only**.
 
-## Status
+Docs:
+- `docs/USAGE.md` (how to write designs; JIT rules; debug/tracing)
+- `docs/IR_SPEC.md` (PYC dialect contract)
+- `docs/PRIMITIVES.md` (backend template “ABI”: matching C++/SV primitives)
 
-This repository is an early prototype. The current goal is to lock down:
+## Design goals (why this repo exists)
 
-- A stable, extensible `pyc` MLIR dialect for common circuit components
-- A strict **ready/valid** handshake model for streaming components (FIFO)
-- Multi-clock domain modeling from day 1 (`!pyc.clock` / `!pyc.reset`)
+- **Readable Python**: build pipelines/modules with `with m.scope("STAGE"):` + normal Python operators.
+- **Static hardware only**: Python control flow lowers to MLIR `scf.*`, then into *static* mux/unrolled logic.
+- **Traceability**: stable name mangling (`scope + file:line`) so generated SV/C++ stays debuggable.
+- **Multi-clock from day 1**: explicit `!pyc.clock` / `!pyc.reset`.
+- **Strict ready/valid**: streaming primitives use a single interpretation everywhere.
 
-## Quickstart (macOS/Linux)
+## Tiny example (JIT-by-default)
 
-### 1) Build MLIR (`mlir-opt`) from `~/llvm-project`
+```python
+from pycircuit import Circuit, cat
 
-```bash
-cmake -G Ninja -S ~/llvm-project/llvm -B ~/llvm-project/build-mlir \
-  -DLLVM_ENABLE_PROJECTS=mlir \
-  -DLLVM_ENABLE_ASSERTIONS=ON \
-  -DCMAKE_BUILD_TYPE=Release
+def build(m: Circuit, STAGES: int = 3) -> None:
+    dom = m.domain("sys")
 
-ninja -C ~/llvm-project/build-mlir mlir-opt
+    a = m.in_wire("a", width=16)
+    b = m.in_wire("b", width=16)
+    sel = m.in_wire("sel", width=1)
+
+    with m.scope("EX"):
+        x = a ^ b
+        y = a + b
+        data = x
+        if sel:
+            data = y
+
+    pkt = m.bundle(data=data, tag=(a == b))
+    bus = pkt.pack()           # lowers to `pyc.concat`
+
+    with m.scope("PIPE0"):
+        r = m.out("bus", domain=dom, width=bus.width, init=0)
+        r.set(bus)
+
+    out = pkt.unpack(r.out())
+    m.output("out_data", out["data"])
+    m.output("out_tag", out["tag"])
 ```
 
-### 2) Build `pyc-opt` / `pyc-compile`
+## Build (pyc-compile / pyc-opt)
+
+Prereqs:
+- CMake ≥ 3.20 + Ninja
+- A C++17 compiler
+- An LLVM+MLIR build/install that provides `LLVMConfig.cmake` + `MLIRConfig.cmake`
+
+### Configure + build (recommended: top-level CMake)
 
 ```bash
-cmake -G Ninja -S pyc/mlir -B pyc/mlir/build \
-  -DMLIR_DIR=$HOME/llvm-project/build-mlir/lib/cmake/mlir \
-  -DLLVM_DIR=$HOME/llvm-project/build-mlir/lib/cmake/llvm
+LLVM_DIR="$(llvm-config --cmakedir)"
+MLIR_DIR="$(dirname "$LLVM_DIR")/mlir"
 
-ninja -C pyc/mlir/build pyc-opt pyc-compile
+cmake -G Ninja -S . -B build \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DLLVM_DIR="$LLVM_DIR" \
+  -DMLIR_DIR="$MLIR_DIR"
+
+ninja -C build pyc-compile pyc-opt
 ```
 
-### 3) Emit `.pyc` from Python and compile to Verilog
+### Alternative: build helper (llvm-project source tree)
+
+If you keep `llvm-project` in `~/llvm-project`, you can use:
 
 ```bash
-PYTHONPATH=binding/python python3 -m pycircuit.cli emit examples/counter.py -o /tmp/counter.pyc
-./pyc/mlir/build/bin/pyc-compile /tmp/counter.pyc --emit=verilog -o /tmp/counter.sv
+bash pyc/mlir/scripts/build_all.sh
 ```
 
-## Python AST/JIT control flow (SCF prototype)
+## Emit + compile a design
 
-The repo includes an AST-based frontend that emits `scf.if` / `scf.for` and then lowers them to static hardware.
+### (Optional) install the Python frontend
 
-In `pycircuit.cli emit`, **JIT mode is enabled by default** when your design defines:
+For convenience you can install the Python package (so `pycircuit` is on your PATH):
 
-- `build(m: Circuit, ...)` (builder argument + optional defaulted params)
+```bash
+python3 -m pip install -e .
+```
+
+Emit `.pyc` (MLIR) from Python:
+
+```bash
+PYTHONPATH=binding/python python3 -m pycircuit.cli emit examples/jit_pipeline_vec.py -o /tmp/jit_pipeline_vec.pyc
+```
+
+If installed via `pip`, you can also run:
+
+```bash
+pycircuit emit examples/jit_pipeline_vec.py -o /tmp/jit_pipeline_vec.pyc
+```
+
+Compile MLIR to SystemVerilog:
+
+```bash
+./build/bin/pyc-compile /tmp/jit_pipeline_vec.pyc --emit=verilog -o /tmp/jit_pipeline_vec.sv
+```
+
+Regenerate the checked-in golden outputs under `examples/generated/`:
 
 ```bash
 bash examples/update_generated.sh
 ```
 
-### Multi-file designs: `@jit_inline`
-
-When splitting a design across multiple Python files (pipeline stages, helper modules), mark helper functions with
-`@pycircuit.jit_inline` so calls from inside `build(...)` are **compiled** (AST/SCF) into the current circuit rather than
-executed as Python at JIT time. This preserves consistent name-mangling with file/line provenance in generated C++/SV.
-
-## Layout
-
-- `binding/python/pycircuit/`: Python DSL + CLI (emits `.pyc` MLIR)
-- `pyc/mlir/`: MLIR dialect, passes, tools (`pyc-opt`, `pyc-compile`)
-- `include/pyc/`: backend template headers (C++ + Verilog)
-- `examples/`: small designs and golden outputs
-- `docs/IR_SPEC.md`: current PYC IR contract (prototype)
-- `docs/USAGE.md`: how to write real designs (JIT/frontend guide)
-
-## LinxISA CPU bring-up (prototype)
-
-This repo includes a LinxISA 5-stage (multi-cycle) CPU bring-up model written in pyCircuit:
+## LinxISA CPU bring-up (example)
 
 - pyCircuit source: `examples/linx_cpu_pyc/`
-- Program images + SV testbench: `examples/linx_cpu/`
+- SV testbench + program images: `examples/linx_cpu/`
 - Generated outputs (checked in): `examples/generated/linx_cpu_pyc/`
 
-### pyCircuit CPU (C++ backend)
-
-After building `pyc-compile`, run the self-checking C++ testbench:
+Run the self-checking C++ regression:
 
 ```bash
 bash tools/run_linx_cpu_pyc_cpp.sh
 ```
 
-Run a LinxISA relocatable ELF (`.o`) directly (loads `.text/.data/.bss`, applies a small set of relocations, boots at `_start`):
+Optional debug artifacts:
+- `PYC_TRACE=1` enables a WB/commit log
+- `PYC_VCD=1` enables VCD dumping
+- `PYC_TRACE_DIR=/path/to/out` overrides the output directory
+
+## Packaging (release tarball)
+
+After building, you can install + package the toolchain:
 
 ```bash
-bash tools/run_linx_cpu_pyc_cpp.sh --elf ../linxisa/linx-test/test_branch2.o
+cmake --install build --prefix dist/pycircuit
+(cd build && cpack -G TGZ)
 ```
 
-Debug trace (prints one line per instruction at WB):
+The tarball includes:
+- `bin/pyc-compile`, `bin/pyc-opt`
+- `include/pyc/*` (C++ + SV template libraries)
+- `share/pycircuit/python/pycircuit` (Python frontend sources; usable via `PYTHONPATH=...`)
 
-```bash
-PYC_TRACE=1 bash tools/run_linx_cpu_pyc_cpp.sh --elf ../linxisa/linx-test/test_branch2.o
-```
+## Repo layout
 
-Override boot PC manually if needed:
-
-```bash
-PYC_BOOT_PC=0x10000 bash tools/run_linx_cpu_pyc_cpp.sh --memh examples/linx_cpu/programs/test_or.memh
-```
+- `binding/python/pycircuit/`: Python DSL + AST/JIT frontend + CLI
+- `pyc/mlir/`: MLIR dialect, passes, tools (`pyc-opt`, `pyc-compile`)
+- `include/pyc/`: backend template libraries (C++ + SystemVerilog primitives)
+- `examples/`: example designs, testbenches, and checked-in generated outputs

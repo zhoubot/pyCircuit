@@ -1,0 +1,86 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  build-and-test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install deps (Ubuntu)
+        if: runner.os == 'Linux'
+        run: |
+          set -euxo pipefail
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build python3 python3-pip clang
+
+          # Install a compatible LLVM+MLIR dev set. Try versioned packages first,
+          # then fall back to unversioned names.
+          for v in 19 18 17 16 15 ""; do
+            if [[ -n "$v" ]]; then
+              pkgs="llvm-${v}-dev mlir-${v}-tools libmlir-${v}-dev"
+            else
+              pkgs="llvm-dev mlir-tools libmlir-dev"
+            fi
+            if sudo apt-get install -y ${pkgs}; then
+              break
+            fi
+          done
+
+          (command -v llvm-config && llvm-config --version) || \
+            (command -v llvm-config-19 && llvm-config-19 --version) || \
+            (command -v llvm-config-18 && llvm-config-18 --version) || \
+            (command -v llvm-config-17 && llvm-config-17 --version) || \
+            (command -v llvm-config-16 && llvm-config-16 --version) || \
+            (command -v llvm-config-15 && llvm-config-15 --version)
+
+      - name: Install deps (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          set -euxo pipefail
+          brew update
+          brew install ninja cmake llvm python@3 || brew install ninja cmake llvm
+          echo "$(brew --prefix llvm)/bin" >> "$GITHUB_PATH"
+
+      - name: Configure
+        run: |
+          set -euxo pipefail
+          LLVM_CONFIG="$(command -v llvm-config || true)"
+          if [[ -z "${LLVM_CONFIG}" ]]; then
+            LLVM_CONFIG="$(command -v llvm-config-19 || command -v llvm-config-18 || command -v llvm-config-17 || command -v llvm-config-16 || command -v llvm-config-15)"
+          fi
+
+          LLVM_DIR="$("${LLVM_CONFIG}" --cmakedir)"
+          MLIR_DIR="$(dirname "$LLVM_DIR")/mlir"
+
+          cmake -G Ninja -S . -B build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DLLVM_DIR="$LLVM_DIR" \
+            -DMLIR_DIR="$MLIR_DIR" \
+            -DPYC_BUILD_CPP_EXAMPLES=OFF
+
+      - name: Build (pyc-compile / pyc-opt)
+        run: |
+          set -euxo pipefail
+          ninja -C build pyc-compile pyc-opt
+
+      - name: Regenerate checked-in outputs
+        run: |
+          set -euxo pipefail
+          bash examples/update_generated.sh
+          git diff --exit-code
+
+      - name: Run Linx CPU C++ regression
+        run: |
+          set -euxo pipefail
+          bash tools/run_linx_cpu_pyc_cpp.sh

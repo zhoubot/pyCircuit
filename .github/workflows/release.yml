@@ -1,0 +1,107 @@
+name: Release
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build-packages:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install deps (Ubuntu)
+        if: runner.os == 'Linux'
+        run: |
+          set -euxo pipefail
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build python3 python3-pip clang tar
+
+          for v in 19 18 17 16 15 ""; do
+            if [[ -n "$v" ]]; then
+              pkgs="llvm-${v}-dev mlir-${v}-tools libmlir-${v}-dev"
+            else
+              pkgs="llvm-dev mlir-tools libmlir-dev"
+            fi
+            if sudo apt-get install -y ${pkgs}; then
+              break
+            fi
+          done
+
+          (command -v llvm-config && llvm-config --version) || \
+            (command -v llvm-config-19 && llvm-config-19 --version) || \
+            (command -v llvm-config-18 && llvm-config-18 --version) || \
+            (command -v llvm-config-17 && llvm-config-17 --version) || \
+            (command -v llvm-config-16 && llvm-config-16 --version) || \
+            (command -v llvm-config-15 && llvm-config-15 --version)
+
+      - name: Install deps (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          set -euxo pipefail
+          brew update
+          brew install ninja cmake llvm python@3 || brew install ninja cmake llvm
+          echo "$(brew --prefix llvm)/bin" >> "$GITHUB_PATH"
+
+      - name: Build + package
+        run: |
+          set -euxo pipefail
+          VERSION="${GITHUB_REF_NAME#v}"
+          PKG="pycircuit-${VERSION}-${RUNNER_OS}-${RUNNER_ARCH}"
+
+          LLVM_CONFIG="$(command -v llvm-config || true)"
+          if [[ -z "${LLVM_CONFIG}" ]]; then
+            LLVM_CONFIG="$(command -v llvm-config-19 || command -v llvm-config-18 || command -v llvm-config-17 || command -v llvm-config-16 || command -v llvm-config-15)"
+          fi
+
+          LLVM_DIR="$("${LLVM_CONFIG}" --cmakedir)"
+          MLIR_DIR="$(dirname "$LLVM_DIR")/mlir"
+
+          cmake -G Ninja -S . -B build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DLLVM_DIR="$LLVM_DIR" \
+            -DMLIR_DIR="$MLIR_DIR" \
+            -DPYC_BUILD_CPP_EXAMPLES=OFF \
+            -DCPACK_PACKAGE_VERSION="$VERSION" \
+            -DCPACK_PACKAGE_FILE_NAME="$PKG"
+
+          ninja -C build pyc-compile pyc-opt
+          (cd build && cpack -G TGZ)
+
+          mkdir -p dist
+          mv "build/${PKG}.tar.gz" "dist/${PKG}.tar.gz"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: pycircuit-${{ runner.os }}-${{ runner.arch }}
+          path: dist/*.tar.gz
+
+  github-release:
+    needs: [build-packages]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*.tar.gz

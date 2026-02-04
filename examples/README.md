@@ -15,7 +15,7 @@ PYTHONPATH=../binding/python python3 -m pycircuit.cli emit jit_cache.py -o /tmp/
 Then compile to Verilog:
 
 ```bash
-../pyc/mlir/build/bin/pyc-compile /tmp/counter.pyc --emit=verilog -o /tmp/counter.sv
+../build/bin/pyc-compile /tmp/counter.pyc --emit=verilog -o /tmp/counter.sv
 ```
 
 ## Checked-in generated outputs
