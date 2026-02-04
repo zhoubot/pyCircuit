@@ -9,6 +9,7 @@ PYTHONPATH=../binding/python python3 -m pycircuit.cli emit multiclock_regs.py -o
 PYTHONPATH=../binding/python python3 -m pycircuit.cli emit wire_ops.py -o /tmp/wire_ops.pyc
 PYTHONPATH=../binding/python python3 -m pycircuit.cli emit jit_control_flow.py -o /tmp/jit_control_flow.pyc
 PYTHONPATH=../binding/python python3 -m pycircuit.cli emit jit_pipeline_vec.py -o /tmp/jit_pipeline_vec.pyc
+PYTHONPATH=../binding/python python3 -m pycircuit.cli emit jit_cache.py -o /tmp/jit_cache.pyc
 ```
 
 Then compile to Verilog:
@@ -34,3 +35,13 @@ Regenerate (all examples + Linx CPU):
 ```bash
 bash examples/update_generated.sh
 ```
+
+## Debug traces
+
+- C++ CPU TB (`examples/linx_cpu_pyc/tb_linx_cpu_pyc.cpp`):
+  - `PYC_TRACE=1` writes a commit log under `examples/generated/linx_cpu_pyc/`.
+  - `PYC_VCD=1` writes a VCD waveform under `examples/generated/linx_cpu_pyc/`.
+  - Optional: set `PYC_TRACE_DIR=/path/to/dir` to override the output directory.
+- SystemVerilog CPU TB (`examples/linx_cpu/tb_linx_cpu_pyc.sv`):
+  - Dumps to `examples/generated/linx_cpu_pyc/` by default.
+  - Disable with `+notrace` (VCD) and/or `+nolog` (log). Add `+logcycles` to log per-cycle CSV rows.

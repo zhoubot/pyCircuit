@@ -3,9 +3,7 @@ from __future__ import annotations
 from pycircuit import Circuit
 
 
-def build() -> Circuit:
-    m = Circuit("WireOps")
-
+def build(m: Circuit) -> None:
     dom = m.domain("sys")
 
     a = m.in_wire("a", width=8)
@@ -18,4 +16,3 @@ def build() -> Circuit:
     r = m.reg_domain(dom, en, y, 0)
 
     m.output("y", r)
-    return m

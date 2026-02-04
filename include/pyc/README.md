@@ -18,13 +18,16 @@ Examples:
 - Verilog: `include/pyc/verilog/pyc_add.sv` defines `module pyc_add #(WIDTH) (a, b, y)`
 - C++: `include/pyc/cpp/pyc_primitives.hpp` defines `template<unsigned Width> struct pyc::cpp::pyc_add { a, b, y; eval(); }`
 
-Additional conventional RTL building blocks (prototype):
+Current checked-in primitives (prototype):
 
-- Ready/valid: `pyc_queue`, `pyc_rr_arb`, `pyc_picker_onehot`
-- Memory: `pyc_mem_if` + `pyc_sram`
+- Combinational: `pyc_add`, `pyc_mux`, `pyc_and`, `pyc_or`, `pyc_xor`, `pyc_not`
+- Sequential: `pyc_reg`
+- Ready/valid: `pyc_fifo` (strict handshake, single-clock)
+- Memory: `pyc_byte_mem` (byte-addressed, async read + sync write, prototype)
 
 Debug/testbench helpers (C++ only):
 
-- `include/pyc/cpp/pyc_print.hpp`: `operator<<` for wires, interfaces, and primitives
+- `include/pyc/cpp/pyc_print.hpp`: `operator<<` for wires and primitives
 - `include/pyc/cpp/pyc_tb.hpp`: small multi-clock-capable testbench harness
+- `include/pyc/cpp/pyc_vcd.hpp`: tiny VCD writer (waveform dumping)
 - Convenience include: `include/pyc/cpp/pyc_debug.hpp`

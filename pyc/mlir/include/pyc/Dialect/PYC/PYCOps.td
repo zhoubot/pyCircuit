@@ -112,6 +112,13 @@ def PYC_ShliOp : PYC_Op<"shli", [Pure, SameOperandsAndResultType]> {
   let assemblyFormat = "$in attr-dict `:` type($result)";
 }
 
+def PYC_AliasOp : PYC_Op<"alias", [Pure, SameOperandsAndResultType]> {
+  let summary = "Alias a value (for naming / debug)";
+  let arguments = (ins AnyType:$in);
+  let results = (outs AnyType:$result);
+  let assemblyFormat = "$in attr-dict `:` type($result)";
+}
+
 def PYC_WireOp : PYC_Op<"wire"> {
   let summary = "Declare a combinational wire (placeholder)";
   let results = (outs AnyInteger:$result);

@@ -47,7 +47,7 @@ def build_wb_stage(
     c = m.const_wire
 
     # Halt flag.
-    m.assign(state.halted.next.sig, halt_set.select(consts.one1, state.halted).sig)
+    m.assign(state.halted.next, halt_set.select(consts.one1, state.halted))
 
     # --- BlockISA control flow ---
     op_c_bstart_std = memwb.op.eq(c(OP_C_BSTART_STD, width=6))
@@ -70,7 +70,7 @@ def build_wb_stage(
 
     pc_inc = state.pc + memwb.len_bytes.zext(width=64)
     pc_next = op_is_boundary.select(br_take.select(br_target_pc, pc_inc), pc_inc)
-    m.assign(state.pc.next.sig, do_wb.select(pc_next, state.pc).sig)
+    m.assign(state.pc.next, do_wb.select(pc_next, state.pc))
 
     # Stage machine: IF -> ID -> EX -> MEM -> WB -> IF, gated by stop.
     stage_seq = stage_is_if.select(c(ST_ID, width=3), state.stage)
@@ -78,10 +78,10 @@ def build_wb_stage(
     stage_seq = stage_is_ex.select(c(ST_MEM, width=3), stage_seq)
     stage_seq = stage_is_mem.select(c(ST_WB, width=3), stage_seq)
     stage_seq = stage_is_wb.select(c(ST_IF, width=3), stage_seq)
-    m.assign(state.stage.next.sig, stop.select(state.stage, stage_seq).sig)
+    m.assign(state.stage.next, stop.select(state.stage, stage_seq))
 
     # Cycle counter.
-    m.assign(state.cycles.next.sig, (state.cycles + consts.one64).sig)
+    m.assign(state.cycles.next, (state.cycles + consts.one64))
 
     # --- Block control state updates ---
     # Commit-argument setters.
@@ -95,8 +95,8 @@ def build_wb_stage(
     commit_tgt_next = (do_wb & op_is_boundary).select(consts.zero64, commit_tgt_next)
     commit_cond_next = (do_wb & op_c_setc_eq).select(memwb.value.trunc(width=1), commit_cond_next)
     commit_tgt_next = (do_wb & op_c_setc_tgt).select(memwb.value, commit_tgt_next)
-    m.assign(state.commit_cond.next.sig, commit_cond_next.sig)
-    m.assign(state.commit_tgt.next.sig, commit_tgt_next.sig)
+    m.assign(state.commit_cond.next, commit_cond_next)
+    m.assign(state.commit_tgt.next, commit_tgt_next)
 
     # Block-transition kind for the *current* block is set by the most recently executed start marker.
     # When a branch/call/ret is taken at a boundary, reset br_kind to FALL so the next marker doesn't
@@ -134,9 +134,9 @@ def build_wb_stage(
     br_base_next = (do_wb & op_c_bstop).select(state.pc, br_base_next)
     br_off_next = (do_wb & op_c_bstop).select(consts.zero64, br_off_next)
 
-    m.assign(state.br_kind.next.sig, br_kind_next.sig)
-    m.assign(state.br_base_pc.next.sig, br_base_next.sig)
-    m.assign(state.br_off.next.sig, br_off_next.sig)
+    m.assign(state.br_kind.next, br_kind_next)
+    m.assign(state.br_base_pc.next, br_base_next)
+    m.assign(state.br_off.next, br_off_next)
 
     # Register writeback + T/U stacks.
     wb_is_store = memwb.op.eq(c(OP_SWI, width=6)) | memwb.op.eq(c(OP_C_SWI, width=6))

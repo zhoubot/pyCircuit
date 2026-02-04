@@ -15,8 +15,8 @@ dist/
 downloads/
 eggs/
 .eggs/
-lib/
-lib64/
+/lib/
+/lib64/
 parts/
 sdist/
 var/
@@ -58,6 +58,9 @@ cover/
 
 # Django stuff:
 *.log
+*.vcd
+*.fst
+*.fsdb
 local_settings.py
 db.sqlite3
 db.sqlite3-journal

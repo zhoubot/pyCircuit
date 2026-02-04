@@ -4,10 +4,11 @@ import ast
 import inspect
 import textwrap
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from .dsl import Signal
-from .hw import Circuit, Reg, Vec, Wire
+from .hw import Bundle, Circuit, Reg, Vec, Wire
 
 
 class JitError(RuntimeError):
@@ -113,10 +114,49 @@ def _emit_scf_for_header(
 
 
 class _Compiler:
-    def __init__(self, m: Circuit, params: dict[str, Any], *, globals_: dict[str, Any]) -> None:
+    def __init__(
+        self,
+        m: Circuit,
+        params: dict[str, Any],
+        *,
+        globals_: dict[str, Any],
+        source_stem: str | None = None,
+        line_offset: int = 0,
+    ) -> None:
         self.m = m
         self.env: dict[str, Any] = dict(params)
         self.globals = globals_
+        self.source_stem = source_stem
+        self.line_offset = int(line_offset)
+
+    def _scoped_name(self, base: str) -> str:
+        scoped = base
+        if hasattr(self.m, "scoped_name"):
+            scoped = self.m.scoped_name(base)  # type: ignore[no-any-return]
+        return scoped
+
+    def _abs_lineno(self, node: ast.AST) -> int | None:
+        line = getattr(node, "lineno", None)
+        if not isinstance(line, int) or line <= 0:
+            return None
+        return self.line_offset + line
+
+    def _name_with_loc(self, name: str, node: ast.AST) -> str:
+        line = self._abs_lineno(node)
+        if line is None:
+            return name
+        if self.source_stem:
+            return f"{name}__{self.source_stem}__L{line}"
+        return f"{name}__L{line}"
+
+    def _alias_if_wire(self, v: Any, *, base_name: str, node: ast.AST) -> Any:
+        n = self._scoped_name(self._name_with_loc(base_name, node))
+        if isinstance(v, Wire):
+            return Wire(self.m, self.m.alias(v.sig, name=n))
+        if isinstance(v, Reg):
+            q_named = Wire(self.m, self.m.alias(v.q.sig, name=n))
+            return Reg(q=q_named, clk=v.clk, rst=v.rst, en=v.en, next=v.next, init=v.init)
+        return v
 
     # ---- constant evaluation (for range bounds, widths, etc) ----
     def eval_const(self, node: ast.AST) -> int:
@@ -196,6 +236,19 @@ class _Compiler:
                         hi = int(sl.upper.value)
                     return base[slice(lo, hi, None)]
                 raise JitError("Vec subscript must be a constant integer or slice")
+            if isinstance(base, Bundle):
+                if isinstance(sl, ast.Constant) and isinstance(sl.value, str):
+                    return base[str(sl.value)]
+                raise JitError("Bundle subscript must be a constant string key")
+            if isinstance(base, (Wire, Reg)):
+                if isinstance(sl, ast.Slice):
+                    if sl.step is not None:
+                        raise JitError("wire slicing does not support step")
+                    lo = None if sl.lower is None else self.eval_const(sl.lower)
+                    hi = None if sl.upper is None else self.eval_const(sl.upper)
+                    return _expect_wire(base, ctx="wire slice")[slice(lo, hi, None)]
+                bit = int(self.eval_const(sl))
+                return _expect_wire(base, ctx="wire subscript")[bit]
             if isinstance(base, (list, tuple)):
                 if isinstance(sl, ast.Constant) and isinstance(sl.value, int):
                     return base[int(sl.value)]
@@ -337,14 +390,14 @@ class _Compiler:
             v = self.eval_expr(node.value)
             if isinstance(v, _IndexValue):
                 raise JitError("cannot assign index values into hardware variables")
-            self.env[name] = v
+            self.env[name] = self._alias_if_wire(v, base_name=name, node=node)
             return
         if isinstance(node, ast.AnnAssign):
             if not isinstance(node.target, ast.Name) or node.value is None:
                 raise JitError("only simple annotated assignments are supported")
             name = node.target.id
             v = self.eval_expr(node.value)
-            self.env[name] = v
+            self.env[name] = self._alias_if_wire(v, base_name=name, node=node)
             return
         if isinstance(node, ast.AugAssign):
             if not isinstance(node.target, ast.Name):
@@ -355,16 +408,22 @@ class _Compiler:
                 raise JitError(f"augassign to unknown name {name!r}")
             rhs = self.eval_expr(node.value)
             if isinstance(node.op, ast.Add):
-                self.env[name] = _expect_wire(cur, ctx="+=") + rhs
+                self.env[name] = self._alias_if_wire(_expect_wire(cur, ctx="+=") + rhs, base_name=name, node=node)
                 return
             if isinstance(node.op, ast.BitAnd):
-                self.env[name] = _expect_wire(cur, ctx="&=") & rhs
+                self.env[name] = self._alias_if_wire(_expect_wire(cur, ctx="&=") & rhs, base_name=name, node=node)
                 return
             if isinstance(node.op, ast.BitOr):
-                self.env[name] = _expect_wire(cur, ctx="|=") | rhs
+                self.env[name] = self._alias_if_wire(_expect_wire(cur, ctx="|=") | rhs, base_name=name, node=node)
                 return
             if isinstance(node.op, ast.BitXor):
-                self.env[name] = _expect_wire(cur, ctx="^=") ^ rhs
+                self.env[name] = self._alias_if_wire(_expect_wire(cur, ctx="^=") ^ rhs, base_name=name, node=node)
+                return
+            if isinstance(node.op, ast.LShift):
+                if not isinstance(cur, Reg):
+                    raise JitError("<<= is only supported for Reg variables (use x = x.shl(amount=...) for wires)")
+                cur <<= rhs
+                self.env[name] = cur
                 return
             raise JitError("unsupported augmented assignment operator")
         if isinstance(node, ast.If):
@@ -373,11 +432,34 @@ class _Compiler:
         if isinstance(node, ast.For):
             self.compile_for(node)
             return
+        if isinstance(node, ast.With):
+            self.compile_with(node)
+            return
         if isinstance(node, ast.Return):
             # Return is handled by the top-level driver; disallow in nested blocks.
             raise JitError("return is only supported at top-level (use m.output instead inside control flow)")
 
         raise JitError(f"unsupported statement: {ast.dump(node, include_attributes=False)}")
+
+    def compile_with(self, node: ast.With) -> None:
+        # Prototype support for naming scopes / context managers.
+        if len(node.items) != 1:
+            raise JitError("with supports exactly one context manager (prototype)")
+        item = node.items[0]
+        if item.optional_vars is not None:
+            raise JitError("with-as is not supported (prototype)")
+
+        cm = self.eval_expr(item.context_expr)
+        enter = getattr(cm, "__enter__", None)
+        exit_ = getattr(cm, "__exit__", None)
+        if enter is None or exit_ is None:
+            raise JitError("with context is not a context manager")
+
+        enter()
+        try:
+            self.compile_block(node.body)
+        finally:
+            exit_(None, None, None)
 
     def compile_if(self, node: ast.If) -> None:
         cond_v = self.eval_expr(node.test)
@@ -415,7 +497,13 @@ class _Compiler:
 
         # then
         self.m.push_indent()
-        then_comp = _Compiler(self.m, {}, globals_=self.globals)
+        then_comp = _Compiler(
+            self.m,
+            {},
+            globals_=self.globals,
+            source_stem=self.source_stem,
+            line_offset=self.line_offset,
+        )
         then_comp.env = dict(pre_env)
         then_comp.compile_block(node.body)
         then_vals = [_expect_wire(then_comp.env[n], ctx="if then") for n in phi_vars]
@@ -425,7 +513,13 @@ class _Compiler:
         # else
         self.m.emit_line("} else {")
         self.m.push_indent()
-        else_comp = _Compiler(self.m, {}, globals_=self.globals)
+        else_comp = _Compiler(
+            self.m,
+            {},
+            globals_=self.globals,
+            source_stem=self.source_stem,
+            line_offset=self.line_offset,
+        )
         else_comp.env = dict(pre_env)
         else_comp.compile_block(node.orelse)
         else_vals = [_expect_wire(else_comp.env[n], ctx="if else") for n in phi_vars]
@@ -435,7 +529,7 @@ class _Compiler:
 
         # Merge results back into env.
         for name, res_ref, ty in zip(phi_vars, results, result_types):
-            self.env[name] = Wire(self.m, Signal(ref=res_ref, ty=ty))
+            self.env[name] = self._alias_if_wire(Wire(self.m, Signal(ref=res_ref, ty=ty)), base_name=name, node=node)
 
     def compile_for(self, node: ast.For) -> None:
         if not isinstance(node.target, ast.Name):
@@ -489,7 +583,13 @@ class _Compiler:
         _emit_scf_for_header(self.m, result_refs, iv_ref, lb.ref, ub.ref, step.ref, iter_args, result_types)
 
         self.m.push_indent()
-        body_comp = _Compiler(self.m, {}, globals_=self.globals)
+        body_comp = _Compiler(
+            self.m,
+            {},
+            globals_=self.globals,
+            source_stem=self.source_stem,
+            line_offset=self.line_offset,
+        )
         body_comp.env = dict(pre_env)
         body_comp.env[loop_var] = _IndexValue(ref=iv_ref)
         for name, arg_ref, w in zip(assigned, iter_arg_refs, iter_inits):
@@ -502,7 +602,7 @@ class _Compiler:
         self.m.emit_line("}")
 
         for name, res_ref, ty in zip(assigned, result_refs, result_types):
-            self.env[name] = Wire(self.m, Signal(ref=res_ref, ty=ty))
+            self.env[name] = self._alias_if_wire(Wire(self.m, Signal(ref=res_ref, ty=ty)), base_name=name, node=node)
 
 
 def compile(fn: Any, *, name: str | None = None, **params: Any) -> Circuit:
@@ -518,7 +618,8 @@ def compile(fn: Any, *, name: str | None = None, **params: Any) -> Circuit:
     - Loop induction variable is currently not usable in expressions.
     """
 
-    src = textwrap.dedent(inspect.getsource(fn))
+    lines, start_line = inspect.getsourcelines(fn)
+    src = textwrap.dedent("".join(lines))
     tree = ast.parse(src)
     fdef = _find_function_def(tree, fn.__name__)
 
@@ -532,7 +633,20 @@ def compile(fn: Any, *, name: str | None = None, **params: Any) -> Circuit:
             raise JitError(f"missing JIT param {a.arg!r}")
 
     m = Circuit(name or fn.__name__)
-    c = _Compiler(m, params=dict(params), globals_=dict(fn.__globals__))
+    src_file = inspect.getsourcefile(fn) or inspect.getfile(fn)
+    src_stem = None
+    try:
+        if src_file:
+            src_stem = Path(src_file).stem
+    except Exception:
+        src_stem = None
+    c = _Compiler(
+        m,
+        params=dict(params),
+        globals_=dict(fn.__globals__),
+        source_stem=src_stem,
+        line_offset=int(start_line - 1),
+    )
     c.env[builder_arg] = m
 
     returned: list[Any] = []

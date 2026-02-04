@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Callable
 
 
 @dataclass(frozen=True)
@@ -20,6 +21,8 @@ class Module:
         self._lines: list[str] = []
         self._next_tmp = 0
         self._indent_level = 1
+        self._finalizers: list[Callable[[], None]] = []
+        self._finalized = False
 
     # --- types ---
     def clock(self, name: str) -> Signal:
@@ -132,10 +135,22 @@ class Module:
         self._emit(f"{tmp} = pyc.shli {a.ref} {{amount = {int(amount)}}} : {a.ty}")
         return Signal(ref=tmp, ty=a.ty)
 
-    def new_wire(self, *, width: int) -> Signal:
+    def alias(self, a: Signal, *, name: str | None = None) -> Signal:
+        """Alias a value (pure) to attach a debug name in codegen."""
+        tmp = self._tmp()
+        if name is None:
+            self._emit(f"{tmp} = pyc.alias {a.ref} : {a.ty}")
+        else:
+            self._emit(f'{tmp} = pyc.alias {a.ref} {{pyc.name = "{name}"}} : {a.ty}')
+        return Signal(ref=tmp, ty=a.ty)
+
+    def new_wire(self, *, width: int, name: str | None = None) -> Signal:
         ty = self.i(width)
         tmp = self._tmp()
-        self._emit(f"{tmp} = pyc.wire : {ty}")
+        if name is None:
+            self._emit(f"{tmp} = pyc.wire : {ty}")
+        else:
+            self._emit(f'{tmp} = pyc.wire {{pyc.name = "{name}"}} : {ty}')
         return Signal(ref=tmp, ty=ty)
 
     def assign(self, dst: Signal, src: Signal) -> None:
@@ -243,6 +258,11 @@ class Module:
 
     # --- emission ---
     def emit_mlir(self) -> str:
+        if not self._finalized:
+            self._finalized = True
+            for fn in list(self._finalizers):
+                fn()
+
         arg_sig = ", ".join(f"{sig.ref}: {sig.ty}" for _, sig in self._args)
         res_types = [v.ty for _, v in self._results]
         if len(res_types) == 0:
@@ -268,6 +288,12 @@ class Module:
         else:
             tail = "\n  func.return\n}\n}\n"
         return header + body + tail
+
+    # --- finalizers ---
+    def add_finalizer(self, fn: Callable[[], None]) -> None:
+        if self._finalized:
+            raise RuntimeError("cannot add finalizers after emit_mlir()")
+        self._finalizers.append(fn)
 
     # --- internals ---
     def _arg(self, name: str, ty: str) -> Signal:

@@ -37,6 +37,7 @@ emit_one multiclock_regs "${ROOT_DIR}/examples/multiclock_regs.py"
 emit_one wire_ops "${ROOT_DIR}/examples/wire_ops.py"
 emit_one jit_control_flow "${ROOT_DIR}/examples/jit_control_flow.py"
 emit_one jit_pipeline_vec "${ROOT_DIR}/examples/jit_pipeline_vec.py"
+emit_one jit_cache "${ROOT_DIR}/examples/jit_cache.py"
 
 # LinxISA CPU (pyCircuit).
 emit_one linx_cpu_pyc "${ROOT_DIR}/examples/linx_cpu_pyc/linx_cpu_pyc.py"

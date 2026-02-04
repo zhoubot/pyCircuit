@@ -1,0 +1,51 @@
+#include "pyc/Dialect/PYC/PYCDialect.h"
+
+#include "pyc/Dialect/PYC/PYCOps.h"
+#include "pyc/Dialect/PYC/PYCTypes.h"
+
+#include "mlir/IR/DialectImplementation.h"
+
+using namespace mlir;
+using namespace pyc;
+
+PYCDialect::PYCDialect(MLIRContext *ctx) : Dialect(getDialectNamespace(), ctx, TypeID::get<PYCDialect>()) {
+  initialize();
+}
+
+Type PYCDialect::parseType(DialectAsmParser &parser) const {
+  StringRef mnemonic;
+  if (failed(parser.parseKeyword(&mnemonic)))
+    return Type();
+
+  MLIRContext *ctx = parser.getContext();
+  if (mnemonic == "clock")
+    return pyc::ClockType::get(ctx);
+  if (mnemonic == "reset")
+    return pyc::ResetType::get(ctx);
+
+  parser.emitError(parser.getNameLoc(), "unknown pyc type: ") << mnemonic;
+  return Type();
+}
+
+void PYCDialect::printType(Type type, DialectAsmPrinter &printer) const {
+  if (isa<pyc::ClockType>(type)) {
+    printer << "clock";
+    return;
+  }
+  if (isa<pyc::ResetType>(type)) {
+    printer << "reset";
+    return;
+  }
+  llvm_unreachable("unknown pyc type");
+}
+
+void PYCDialect::initialize() {
+  addTypes<
+#define GET_TYPEDEF_LIST
+#include "pyc/Dialect/PYC/PYCTypes.cpp.inc"
+      >();
+  addOperations<
+#define GET_OP_LIST
+#include "pyc/Dialect/PYC/PYCOps.cpp.inc"
+      >();
+}

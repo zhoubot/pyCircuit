@@ -1,5 +1,6 @@
 #include <cstdint>
 #include <cstdlib>
+#include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <optional>
@@ -52,22 +53,58 @@ static bool runProgram(const char *name, const char *memhPath, std::uint64_t boo
   dut.boot_sp = Wire<64>(kBootSp);
 
   Testbench<pyc::gen::linx_cpu_pyc> tb(dut);
+
+  const bool trace_log = (std::getenv("PYC_TRACE") != nullptr);
+  const bool trace_vcd = (std::getenv("PYC_VCD") != nullptr);
+  if (trace_log || trace_vcd) {
+    const char *trace_dir_env = std::getenv("PYC_TRACE_DIR");
+    std::filesystem::path out_dir =
+        trace_dir_env ? std::filesystem::path(trace_dir_env) : std::filesystem::path("examples/generated/linx_cpu_pyc");
+    std::filesystem::create_directories(out_dir);
+
+    if (trace_log) {
+      tb.enableLog((out_dir / (std::string("tb_linx_cpu_pyc_cpp_") + name + ".log")).string());
+      tb.log() << "tb_linx_cpu_pyc(C++): memh=" << memhPath << " boot_pc=0x" << std::hex << bootPc << std::dec << "\n";
+    }
+
+    if (trace_vcd) {
+      tb.enableVcd((out_dir / (std::string("tb_linx_cpu_pyc_cpp_") + name + ".vcd")).string(), /*top=*/"tb_linx_cpu_pyc_cpp");
+      tb.vcdTrace(dut.clk, "clk");
+      tb.vcdTrace(dut.rst, "rst");
+      tb.vcdTrace(dut.boot_pc, "boot_pc");
+      tb.vcdTrace(dut.boot_sp, "boot_sp");
+      tb.vcdTrace(dut.halted, "halted");
+      tb.vcdTrace(dut.pc, "pc");
+      tb.vcdTrace(dut.stage, "stage");
+      tb.vcdTrace(dut.cycles, "cycles");
+      tb.vcdTrace(dut.if_window, "if_window");
+      tb.vcdTrace(dut.wb_op, "wb_op");
+      tb.vcdTrace(dut.wb_regdst, "wb_regdst");
+      tb.vcdTrace(dut.wb_value, "wb_value");
+      tb.vcdTrace(dut.commit_cond, "commit_cond");
+      tb.vcdTrace(dut.commit_tgt, "commit_tgt");
+      tb.vcdTrace(dut.a0, "a0");
+      tb.vcdTrace(dut.a1, "a1");
+      tb.vcdTrace(dut.ra, "ra");
+      tb.vcdTrace(dut.sp, "sp");
+    }
+  }
+
   tb.addClock(dut.clk, /*halfPeriodSteps=*/1);
   tb.reset(dut.rst, /*cyclesAsserted=*/2, /*cyclesDeasserted=*/1);
 
-  const bool trace = (std::getenv("PYC_TRACE") != nullptr);
   std::uint64_t insnCount = 0;
 
   for (std::uint64_t i = 0; i < 200000; i++) {
-    if (trace && dut.stage.value() == 4 && !dut.halted.toBool()) { // ST_WB
+    if (trace_log && dut.stage.value() == 4 && !dut.halted.toBool()) { // ST_WB
       insnCount++;
-      std::cerr << "[wb #" << std::dec << insnCount << "] pc=0x" << std::hex << dut.pc.value()
-                << " win=0x" << dut.if_window.value() << " op=" << std::dec << dut.wb_op.value()
-                << " regdst=" << dut.wb_regdst.value() << " value=0x" << std::hex << dut.wb_value.value()
-                << " a0=0x" << dut.a0.value() << " a1=0x" << dut.a1.value() << " ra=0x" << dut.ra.value()
-                << " sp=0x" << dut.sp.value() << " br_kind=" << std::dec << dut.br_kind.value()
-                << " commit_cond=" << dut.commit_cond.value() << " commit_tgt=0x" << std::hex << dut.commit_tgt.value()
-                << std::dec << "\n";
+      tb.log() << "[wb #" << std::dec << insnCount << "] pc=0x" << std::hex << dut.pc.value()
+               << " win=0x" << dut.if_window.value() << " op=" << std::dec << dut.wb_op.value()
+               << " regdst=" << dut.wb_regdst.value() << " value=0x" << std::hex << dut.wb_value.value()
+               << " a0=0x" << dut.a0.value() << " a1=0x" << dut.a1.value() << " ra=0x" << dut.ra.value()
+               << " sp=0x" << dut.sp.value() << " br_kind=" << std::dec << dut.br_kind.value()
+               << " commit_cond=" << dut.commit_cond.value() << " commit_tgt=0x" << std::hex << dut.commit_tgt.value()
+               << std::dec << "\n";
     }
     tb.runCycles(1);
     if (dut.halted.toBool())

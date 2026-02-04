@@ -28,59 +28,67 @@ def build(m: Circuit, *, mem_bytes: int = (1 << 20)) -> None:
     c = m.const_wire
     consts = make_consts(m)
 
-    # --- core state regs (declared with backedge wires) ---
-    state = CoreState(
-        stage=m.backedge_reg(clk, rst, width=3, init=c(ST_IF, width=3), en=consts.one1),
-        pc=m.backedge_reg(clk, rst, width=64, init=boot_pc, en=consts.one1),
-        br_kind=m.backedge_reg(clk, rst, width=2, init=c(BK_FALL, width=2), en=consts.one1),
-        br_base_pc=m.backedge_reg(clk, rst, width=64, init=boot_pc, en=consts.one1),
-        br_off=m.backedge_reg(clk, rst, width=64, init=consts.zero64, en=consts.one1),
-        commit_cond=m.backedge_reg(clk, rst, width=1, init=consts.zero1, en=consts.one1),
-        commit_tgt=m.backedge_reg(clk, rst, width=64, init=consts.zero64, en=consts.one1),
-        cycles=m.backedge_reg(clk, rst, width=64, init=consts.zero64, en=consts.one1),
-        halted=m.backedge_reg(clk, rst, width=1, init=consts.zero1, en=consts.one1),
-    )
+    # --- core state regs (named) ---
+    with m.scope("state"):
+        state = CoreState(
+            stage=m.out("stage", clk=clk, rst=rst, width=3, init=c(ST_IF, width=3), en=consts.one1),
+            pc=m.out("pc", clk=clk, rst=rst, width=64, init=boot_pc, en=consts.one1),
+            br_kind=m.out("br_kind", clk=clk, rst=rst, width=2, init=c(BK_FALL, width=2), en=consts.one1),
+            br_base_pc=m.out("br_base_pc", clk=clk, rst=rst, width=64, init=boot_pc, en=consts.one1),
+            br_off=m.out("br_off", clk=clk, rst=rst, width=64, init=consts.zero64, en=consts.one1),
+            commit_cond=m.out("commit_cond", clk=clk, rst=rst, width=1, init=consts.zero1, en=consts.one1),
+            commit_tgt=m.out("commit_tgt", clk=clk, rst=rst, width=64, init=consts.zero64, en=consts.one1),
+            cycles=m.out("cycles", clk=clk, rst=rst, width=64, init=consts.zero64, en=consts.one1),
+            halted=m.out("halted", clk=clk, rst=rst, width=1, init=consts.zero1, en=consts.one1),
+        )
 
-    pipe_ifid = IfIdRegs(window=m.backedge_reg(clk, rst, width=64, init=consts.zero64, en=consts.one1))
+    with m.scope("ifid"):
+        pipe_ifid = IfIdRegs(window=m.out("window", clk=clk, rst=rst, width=64, init=consts.zero64, en=consts.one1))
 
-    pipe_idex = IdExRegs(
-        op=m.backedge_reg(clk, rst, width=6, init=c(0, width=6), en=consts.one1),
-        len_bytes=m.backedge_reg(clk, rst, width=3, init=consts.zero3, en=consts.one1),
-        regdst=m.backedge_reg(clk, rst, width=6, init=c(REG_INVALID, width=6), en=consts.one1),
-        srcl=m.backedge_reg(clk, rst, width=6, init=c(REG_INVALID, width=6), en=consts.one1),
-        srcr=m.backedge_reg(clk, rst, width=6, init=c(REG_INVALID, width=6), en=consts.one1),
-        srcp=m.backedge_reg(clk, rst, width=6, init=c(REG_INVALID, width=6), en=consts.one1),
-        imm=m.backedge_reg(clk, rst, width=64, init=consts.zero64, en=consts.one1),
-        srcl_val=m.backedge_reg(clk, rst, width=64, init=consts.zero64, en=consts.one1),
-        srcr_val=m.backedge_reg(clk, rst, width=64, init=consts.zero64, en=consts.one1),
-        srcp_val=m.backedge_reg(clk, rst, width=64, init=consts.zero64, en=consts.one1),
-    )
+    with m.scope("idex"):
+        pipe_idex = IdExRegs(
+            op=m.out("op", clk=clk, rst=rst, width=6, init=c(0, width=6), en=consts.one1),
+            len_bytes=m.out("len_bytes", clk=clk, rst=rst, width=3, init=consts.zero3, en=consts.one1),
+            regdst=m.out("regdst", clk=clk, rst=rst, width=6, init=c(REG_INVALID, width=6), en=consts.one1),
+            srcl=m.out("srcl", clk=clk, rst=rst, width=6, init=c(REG_INVALID, width=6), en=consts.one1),
+            srcr=m.out("srcr", clk=clk, rst=rst, width=6, init=c(REG_INVALID, width=6), en=consts.one1),
+            srcp=m.out("srcp", clk=clk, rst=rst, width=6, init=c(REG_INVALID, width=6), en=consts.one1),
+            imm=m.out("imm", clk=clk, rst=rst, width=64, init=consts.zero64, en=consts.one1),
+            srcl_val=m.out("srcl_val", clk=clk, rst=rst, width=64, init=consts.zero64, en=consts.one1),
+            srcr_val=m.out("srcr_val", clk=clk, rst=rst, width=64, init=consts.zero64, en=consts.one1),
+            srcp_val=m.out("srcp_val", clk=clk, rst=rst, width=64, init=consts.zero64, en=consts.one1),
+        )
 
-    pipe_exmem = ExMemRegs(
-        op=m.backedge_reg(clk, rst, width=6, init=c(0, width=6), en=consts.one1),
-        len_bytes=m.backedge_reg(clk, rst, width=3, init=consts.zero3, en=consts.one1),
-        regdst=m.backedge_reg(clk, rst, width=6, init=c(REG_INVALID, width=6), en=consts.one1),
-        alu=m.backedge_reg(clk, rst, width=64, init=consts.zero64, en=consts.one1),
-        is_load=m.backedge_reg(clk, rst, width=1, init=consts.zero1, en=consts.one1),
-        is_store=m.backedge_reg(clk, rst, width=1, init=consts.zero1, en=consts.one1),
-        size=m.backedge_reg(clk, rst, width=3, init=consts.zero3, en=consts.one1),
-        addr=m.backedge_reg(clk, rst, width=64, init=consts.zero64, en=consts.one1),
-        wdata=m.backedge_reg(clk, rst, width=64, init=consts.zero64, en=consts.one1),
-    )
+    with m.scope("exmem"):
+        pipe_exmem = ExMemRegs(
+            op=m.out("op", clk=clk, rst=rst, width=6, init=c(0, width=6), en=consts.one1),
+            len_bytes=m.out("len_bytes", clk=clk, rst=rst, width=3, init=consts.zero3, en=consts.one1),
+            regdst=m.out("regdst", clk=clk, rst=rst, width=6, init=c(REG_INVALID, width=6), en=consts.one1),
+            alu=m.out("alu", clk=clk, rst=rst, width=64, init=consts.zero64, en=consts.one1),
+            is_load=m.out("is_load", clk=clk, rst=rst, width=1, init=consts.zero1, en=consts.one1),
+            is_store=m.out("is_store", clk=clk, rst=rst, width=1, init=consts.zero1, en=consts.one1),
+            size=m.out("size", clk=clk, rst=rst, width=3, init=consts.zero3, en=consts.one1),
+            addr=m.out("addr", clk=clk, rst=rst, width=64, init=consts.zero64, en=consts.one1),
+            wdata=m.out("wdata", clk=clk, rst=rst, width=64, init=consts.zero64, en=consts.one1),
+        )
 
-    pipe_memwb = MemWbRegs(
-        op=m.backedge_reg(clk, rst, width=6, init=c(0, width=6), en=consts.one1),
-        len_bytes=m.backedge_reg(clk, rst, width=3, init=consts.zero3, en=consts.one1),
-        regdst=m.backedge_reg(clk, rst, width=6, init=c(REG_INVALID, width=6), en=consts.one1),
-        value=m.backedge_reg(clk, rst, width=64, init=consts.zero64, en=consts.one1),
-    )
+    with m.scope("memwb"):
+        pipe_memwb = MemWbRegs(
+            op=m.out("op", clk=clk, rst=rst, width=6, init=c(0, width=6), en=consts.one1),
+            len_bytes=m.out("len_bytes", clk=clk, rst=rst, width=3, init=consts.zero3, en=consts.one1),
+            regdst=m.out("regdst", clk=clk, rst=rst, width=6, init=c(REG_INVALID, width=6), en=consts.one1),
+            value=m.out("value", clk=clk, rst=rst, width=64, init=consts.zero64, en=consts.one1),
+        )
 
     # --- register files ---
-    rf = RegFiles(
-        gpr=make_gpr(m, clk, rst, boot_sp=boot_sp, en=consts.one1),
-        t=make_regs(m, clk, rst, count=4, width=64, init=consts.zero64, en=consts.one1),
-        u=make_regs(m, clk, rst, count=4, width=64, init=consts.zero64, en=consts.one1),
-    )
+    with m.scope("gpr"):
+        gpr = make_gpr(m, clk, rst, boot_sp=boot_sp, en=consts.one1)
+    with m.scope("t"):
+        t = make_regs(m, clk, rst, count=4, width=64, init=consts.zero64, en=consts.one1)
+    with m.scope("u"):
+        u = make_regs(m, clk, rst, count=4, width=64, init=consts.zero64, en=consts.one1)
+
+    rf = RegFiles(gpr=gpr, t=t, u=u)
 
     # --- stage control ---
     stage_is_if = state.stage.eq(c(ST_IF, width=3))

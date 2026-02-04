@@ -3,7 +3,7 @@
 
 namespace pyc::gen {
 
-struct MultiClockRegs {
+struct MulticlockRegs {
   pyc::cpp::Wire<1> clk_a{};
   pyc::cpp::Wire<1> rst_a{};
   pyc::cpp::Wire<1> clk_b{};
@@ -11,47 +11,59 @@ struct MultiClockRegs {
   pyc::cpp::Wire<8> a_count{};
   pyc::cpp::Wire<8> b_count{};
 
-  pyc::cpp::Wire<1> v1{};
+  pyc::cpp::Wire<8> v1{};
   pyc::cpp::Wire<8> v2{};
-  pyc::cpp::Wire<8> v3{};
-  pyc::cpp::Wire<1> v4{};
+  pyc::cpp::Wire<1> v3{};
+  pyc::cpp::Wire<8> v4{};
   pyc::cpp::Wire<8> v5{};
-  pyc::cpp::Wire<8> v6{};
+  pyc::cpp::Wire<1> v6{};
+  pyc::cpp::Wire<1> en__multiclock_regs__L12{};
+  pyc::cpp::Wire<8> a__next{};
   pyc::cpp::Wire<8> v7{};
+  pyc::cpp::Wire<8> a{};
+  pyc::cpp::Wire<8> a__multiclock_regs__L14{};
   pyc::cpp::Wire<8> v8{};
+  pyc::cpp::Wire<8> b__next{};
   pyc::cpp::Wire<8> v9{};
+  pyc::cpp::Wire<8> b{};
+  pyc::cpp::Wire<8> b__multiclock_regs__L17{};
   pyc::cpp::Wire<8> v10{};
-  pyc::cpp::Wire<8> v11{};
-  pyc::cpp::Wire<8> v12{};
 
   pyc::cpp::pyc_reg<8> v7_inst;
   pyc::cpp::pyc_reg<8> v9_inst;
-  pyc::cpp::pyc_reg<8> v10_inst;
-  pyc::cpp::pyc_reg<8> v12_inst;
 
-  MultiClockRegs() :
-      v7_inst(clk_a, rst_a, v4, v5, v5, v7),
-      v9_inst(clk_a, rst_a, v4, v8, v5, v9),
-      v10_inst(clk_b, rst_b, v4, v5, v5, v10),
-      v12_inst(clk_b, rst_b, v4, v11, v5, v12) {
+  MulticlockRegs() :
+      v7_inst(clk_a, rst_a, en__multiclock_regs__L12, a__next, v5, v7),
+      v9_inst(clk_b, rst_b, en__multiclock_regs__L12, b__next, v5, v9) {
     eval();
   }
 
   inline void eval_comb_0() {
-    v1 = pyc::cpp::Wire<1>(1ull);
+    v1 = pyc::cpp::Wire<8>(1ull);
     v2 = pyc::cpp::Wire<8>(0ull);
-    v3 = pyc::cpp::Wire<8>(1ull);
+    v3 = pyc::cpp::Wire<1>(1ull);
     v4 = v1;
     v5 = v2;
     v6 = v3;
   }
 
-  void eval() {
+  inline void eval_comb_pass() {
     eval_comb_0();
-    v8 = (v7 + v6);
-    v11 = (v10 + v6);
-    a_count = v9;
-    b_count = v12;
+    en__multiclock_regs__L12 = v6;
+    a = v7;
+    a__multiclock_regs__L14 = a;
+    v8 = (a__multiclock_regs__L14 + v4);
+    a__next = v8;
+    b = v9;
+    b__multiclock_regs__L17 = b;
+    v10 = (b__multiclock_regs__L17 + v4);
+    b__next = v10;
+  }
+
+  void eval() {
+    eval_comb_pass();
+    a_count = a__multiclock_regs__L14;
+    b_count = b__multiclock_regs__L17;
   }
 
   void tick() {
@@ -60,13 +72,9 @@ struct MultiClockRegs {
     // Phase 1: compute.
     v7_inst.tick_compute();
     v9_inst.tick_compute();
-    v10_inst.tick_compute();
-    v12_inst.tick_compute();
     // Phase 2: commit.
     v7_inst.tick_commit();
     v9_inst.tick_commit();
-    v10_inst.tick_commit();
-    v12_inst.tick_commit();
   }
 };
 

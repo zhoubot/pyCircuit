@@ -1,22 +1,20 @@
 from __future__ import annotations
 
-from pycircuit import Module
+from pycircuit import Circuit
 
 
-def build() -> Module:
-    m = Module("FifoLoopback")
-
+def build(m: Circuit) -> None:
     clk = m.clock("clk")
     rst = m.reset("rst")
 
-    in_valid = m.input("in_valid", width=1)
-    in_data = m.input("in_data", width=8)
-    out_ready = m.input("out_ready", width=1)
+    in_valid = m.in_wire("in_valid", width=1)
+    in_data = m.in_wire("in_data", width=8)
+    out_ready = m.in_wire("out_ready", width=1)
 
-    in_ready, out_valid, out_data = m.fifo(clk, rst, in_valid, in_data, out_ready, depth=2)
+    q = m.queue("q", clk=clk, rst=rst, width=8, depth=2)
+    q.push(in_data, when=in_valid)
+    p = q.pop(when=out_ready)
 
-    m.output("in_ready", in_ready)
-    m.output("out_valid", out_valid)
-    m.output("out_data", out_data)
-    return m
-
+    m.output("in_ready", q.in_ready)
+    m.output("out_valid", p.valid)
+    m.output("out_data", p.data)

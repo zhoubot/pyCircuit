@@ -36,25 +36,7 @@ Semantics (posedge `clk`):
 - if `rst`: `q <= init`
 - else if `en`: `q <= d`
 
-### 1.3 `Stream<W>` (ready/valid)
-
-Bundle for strict ready/valid handshake.
-
-- C++: `pyc::cpp::Stream<W>` (`include/pyc/cpp/pyc_stream.hpp`)
-- Verilog: `pyc_stream_if #(WIDTH=W)` interface (`include/pyc/verilog/pyc_stream_if.sv`)
-
-Signals:
-
-- `valid` (producer → consumer)
-- `ready` (consumer → producer)
-- `data` (producer → consumer)
-
-Convenience:
-
-- Verilog: `pyc_handshake_pkg::fire(valid, ready)` (`include/pyc/verilog/pyc_handshake_pkg.sv`)
-- C++: `pyc::cpp::fire(valid, ready)` (`include/pyc/cpp/pyc_handshake.hpp`)
-
-### 1.4 `Vec<T, N>`
+### 1.3 `Vec<T, N>`
 
 Fixed-size container (useful for regfiles, bundles of lanes, etc.).
 
@@ -104,54 +86,25 @@ Handshake:
 Note: this is currently **single-clock**; async FIFO should be a separate
 primitive.
 
-### 3.2 `pyc_queue` (fall-through queue)
+## 4) Memory
 
-- Verilog: `module pyc_queue #(WIDTH, DEPTH) (...)`
-- C++: `pyc::cpp::pyc_queue<Width, Depth>` (`include/pyc/cpp/pyc_queue.hpp`)
+### 4.1 `pyc_byte_mem` (byte-addressed, prototype)
 
-Ports match `pyc_fifo`. When `DEPTH==1`, it behaves like a standard fall-through
-skid buffer (0-cycle when downstream is ready, buffers 1 element when stalled).
+- Verilog: `module pyc_byte_mem #(ADDR_WIDTH, DATA_WIDTH, DEPTH) (...)` (`include/pyc/verilog/pyc_byte_mem.sv`)
+- C++: `pyc::cpp::pyc_byte_mem<AddrWidth, DataWidth, DepthBytes>` (`include/pyc/cpp/pyc_byte_mem.hpp`)
 
-## 4) Arbitration / Picking
+Semantics (prototype):
+- Read is combinational: `rdata` reflects `mem[raddr]`.
+- Write is synchronous on posedge: when `wvalid`, update bytes selected by `wstrb`.
+- Reset does not clear memory; testbenches can initialize contents via `memh`/poke helpers.
 
-### 4.1 `pyc_rr_arb` (round-robin arbiter)
-
-- Verilog: `module pyc_rr_arb #(WIDTH, N) (...)`
-- C++: `pyc::cpp::pyc_rr_arb<Width, N>` (`include/pyc/cpp/pyc_rr_arb.hpp`)
-
-Ports:
-
-- `in_valid[N]`, `in_ready[N]`, `in_data[N]`
-- `out_valid`, `out_ready`, `out_data`, `out_sel`
-
-### 4.2 `pyc_picker_onehot`
-
-- Verilog: `module pyc_picker_onehot #(WIDTH, N) (sel, in_data, y)`
-- C++: `pyc::cpp::pyc_picker_onehot<Width, N>` (`include/pyc/cpp/pyc_picker.hpp`)
-
-## 5) Memory / SRAM
-
-### 5.1 `pyc_mem_if` (interface / bundle)
-
-- Verilog: `interface pyc_mem_if #(ADDR_WIDTH, DATA_WIDTH)` (`include/pyc/verilog/pyc_mem_if.sv`)
-- C++: `pyc::cpp::pyc_mem_if<AddrWidth, DataWidth>` (`include/pyc/cpp/pyc_interfaces.hpp`)
-
-Signals:
-
-- request: `req_valid`, `req_ready`, `req_addr`, `req_write`, `req_wdata`, `req_wstrb`
-- response: `resp_valid`, `resp_ready`, `resp_rdata`
-
-### 5.2 `pyc_sram` (single outstanding)
-
-- Verilog: `module pyc_sram #(ADDR_WIDTH, DATA_WIDTH, DEPTH) (...)` (`include/pyc/verilog/pyc_sram.sv`)
-- C++: `pyc::cpp::pyc_sram<AddrWidth, DataWidth, Depth>` (`include/pyc/cpp/pyc_sram.hpp`)
-
-## 6) Debugging / Testbench (C++)
+## 5) Debugging / Testbench (C++)
 
 Prototype-only utilities to help with bring-up and debugging:
 
-- Printing: `include/pyc/cpp/pyc_print.hpp` defines `operator<<` for `Wire`, `Vec`, interfaces, and primitives.
+- Printing: `include/pyc/cpp/pyc_print.hpp` defines `operator<<` for `Wire`, `Vec`, and primitives.
 - Testbench: `include/pyc/cpp/pyc_tb.hpp` provides `pyc::cpp::Testbench<Dut>` (multi-clock ready).
+- Tracing: `include/pyc/cpp/pyc_vcd.hpp` provides a tiny VCD dumper (usable via `Testbench::enableVcd()`).
 - Convenience include: `include/pyc/cpp/pyc_debug.hpp`.
 
 Example C++ testbench:

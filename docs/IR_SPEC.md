@@ -41,6 +41,17 @@ All examples below live inside a standard MLIR `module { ... }` and use
 %sh = pyc.shli %x {amount = 2} : i16
 ```
 
+### 2.2.1 `pyc.alias` (debug naming)
+
+`pyc.alias` is a pure identity op used to attach stable debug names for codegen:
+
+```mlir
+%y = pyc.alias %x {pyc.name = "foo__my_file__L42"} : i8
+```
+
+Backends use the `pyc.name` attribute (not `name`) to avoid conflicts with other
+ops that legitimately use a `name` attribute (e.g. memory instances).
+
 ### 2.3 `pyc.wire` / `pyc.assign` (netlist backedges)
 
 The prototype includes a netlist-style “wire placeholder” + explicit driver:

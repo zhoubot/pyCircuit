@@ -12,14 +12,14 @@ def make_gpr(m: Circuit, clk: Signal, rst: Signal, *, boot_sp: Wire, en: Wire) -
     regs: list[Reg] = []
     for i in range(24):
         init = boot_sp if i == 1 else zero64
-        regs.append(m.backedge_reg(clk, rst, width=64, init=init, en=en))
+        regs.append(m.out(f"r{i}", clk=clk, rst=rst, width=64, init=init, en=en))
     return regs
 
 
 def make_regs(m: Circuit, clk: Signal, rst: Signal, *, count: int, width: int, init: Wire, en: Wire) -> list[Reg]:
     regs: list[Reg] = []
-    for _ in range(count):
-        regs.append(m.backedge_reg(clk, rst, width=width, init=init, en=en))
+    for i in range(count):
+        regs.append(m.out(f"r{i}", clk=clk, rst=rst, width=width, init=init, en=en))
     return regs
 
 
@@ -52,13 +52,12 @@ def commit_gpr(m: Circuit, gpr: list[Reg], *, do_reg_write: Wire, regdst: Reg, v
     zero64 = m.const_wire(0, width=64)
     for i in range(24):
         if i == 0:
-            m.assign(gpr[i].next.sig, zero64.sig)
+            gpr[i].set(zero64)
             continue
         we = do_reg_write & regdst.eq(c(i, width=6))
-        nxt = we.select(value, gpr[i])
-        m.assign(gpr[i].next.sig, nxt.sig)
+        gpr[i].set(value, when=we)
 
 
 def commit_stack(m: Circuit, arr: list[Reg], next_vals: list[Wire]) -> None:
     for i in range(4):
-        m.assign(arr[i].next.sig, next_vals[i].sig)
+        arr[i].set(next_vals[i])

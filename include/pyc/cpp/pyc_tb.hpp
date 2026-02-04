@@ -2,9 +2,14 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <fstream>
+#include <iostream>
+#include <optional>
+#include <string>
 #include <vector>
 
 #include "pyc_bits.hpp"
+#include "pyc_vcd.hpp"
 
 namespace pyc::cpp {
 
@@ -37,6 +42,27 @@ class Testbench {
 public:
   explicit Testbench(Dut &dut) : dut_(dut) {}
 
+  bool enableVcd(const std::string &path, const std::string &top = "tb", const std::string &timescale = "1ns") {
+    vcd_.emplace();
+    return vcd_->open(path, top, timescale);
+  }
+
+  template <unsigned W>
+  bool vcdTrace(Wire<W> &sig, const std::string &name) {
+    if (!vcd_)
+      return false;
+    return vcd_->add(sig, name);
+  }
+
+  bool enableLog(const std::string &path) {
+    log_.emplace(path, std::ios::out | std::ios::trunc);
+    return log_->is_open();
+  }
+
+  bool logEnabled() const { return log_.has_value() && log_->is_open(); }
+
+  std::ostream &log() { return logEnabled() ? *log_ : std::cerr; }
+
   void addClock(Wire<1> &clk, std::uint64_t halfPeriodSteps = 1, std::uint64_t phaseSteps = 0, bool startHigh = false) {
     TbClock c;
     c.clk = &clk;
@@ -64,6 +90,9 @@ public:
 
     // Re-evaluate combinational logic after state updates.
     dut_.eval();
+
+    if (vcd_)
+      vcd_->dump(time_);
 
     time_++;
   }
@@ -93,7 +122,8 @@ private:
   Dut &dut_;
   std::vector<TbClock> clocks_{};
   std::uint64_t time_ = 0;
+  std::optional<VcdWriter> vcd_{};
+  std::optional<std::ofstream> log_{};
 };
 
 } // namespace pyc::cpp
-

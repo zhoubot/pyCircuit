@@ -58,52 +58,52 @@ def decode_window(m: Circuit, window: Wire) -> Decode:
     insn32 = window.trunc(width=32)
     insn48 = window.trunc(width=48)
 
-    low4 = insn16.slice(lsb=0, width=4)
+    low4 = insn16[0:4]
     is_hl = low4.eq(c(0xE, width=4))
 
-    is32 = insn16.slice(lsb=0, width=1)
+    is32 = insn16[0]
     in32 = (~is_hl) & is32
     in16 = (~is_hl) & (~is32)
 
-    rd32 = insn32.slice(lsb=7, width=5).zext(width=6)
-    rs1_32 = insn32.slice(lsb=15, width=5).zext(width=6)
-    rs2_32 = insn32.slice(lsb=20, width=5).zext(width=6)
-    srcp_32 = insn32.slice(lsb=27, width=5).zext(width=6)
+    rd32 = insn32[7:12].zext(width=6)
+    rs1_32 = insn32[15:20].zext(width=6)
+    rs2_32 = insn32[20:25].zext(width=6)
+    srcp_32 = insn32[27:32].zext(width=6)
 
-    imm12_u64 = insn32.slice(lsb=20, width=12).zext(width=64)
-    imm12_s64 = insn32.slice(lsb=20, width=12).sext(width=64)
+    imm12_u64 = insn32[20:32].zext(width=64)
+    imm12_s64 = insn32[20:32].sext(width=64)
 
-    imm20_s64 = insn32.slice(lsb=12, width=20).sext(width=64)
+    imm20_s64 = insn32[12:32].sext(width=64)
 
     # SWI simm12 is split: {insn32[11:7], insn32[31:25]}.
-    swi_lo5 = insn32.slice(lsb=7, width=5)
-    swi_hi7 = insn32.slice(lsb=25, width=7)
+    swi_lo5 = insn32[7:12]
+    swi_hi7 = insn32[25:32]
     simm12_raw = swi_lo5.zext(width=12).shl(amount=7) | swi_hi7.zext(width=12)
     simm12_s64 = simm12_raw.sext(width=64)
-    simm17_s64 = insn32.slice(lsb=15, width=17).sext(width=64)
+    simm17_s64 = insn32[15:32].sext(width=64)
 
     # HL.LUI immediate packing (48-bit):
     # pfx = insn48[15:0]; main = insn48[47:16]
     pfx16 = insn48.trunc(width=16)
-    main32 = insn48.slice(lsb=16, width=32)
-    imm_hi12 = pfx16.slice(lsb=4, width=12)
-    imm_lo20 = main32.slice(lsb=12, width=20)
+    main32 = insn48[16:48]
+    imm_hi12 = pfx16[4:16]
+    imm_lo20 = main32[12:32]
     imm32 = imm_hi12.zext(width=32).shl(amount=20) | imm_lo20.zext(width=32)
     imm_hl_lui = imm32.sext(width=64)
 
-    rd_hl = main32.slice(lsb=7, width=5).zext(width=6)
+    rd_hl = main32[7:12].zext(width=6)
 
     # 16-bit fields.
-    rd16 = insn16.slice(lsb=11, width=5).zext(width=6)
-    rs16 = insn16.slice(lsb=6, width=5).zext(width=6)
+    rd16 = insn16[11:16].zext(width=6)
+    rs16 = insn16[6:11].zext(width=6)
     # Immediate fields:
     # - simm5_11_s5: bits[15:11] (used by loads/stores)
     # - simm5_6_s5: bits[10:6] (used by C.MOVI / C.SETRET)
-    simm5_11_s64 = insn16.slice(lsb=11, width=5).sext(width=64)
-    simm5_6_s64 = insn16.slice(lsb=6, width=5).sext(width=64)
-    simm12_s64_c = insn16.slice(lsb=4, width=12).sext(width=64)
-    uimm5_u64 = insn16.slice(lsb=6, width=5).zext(width=64)
-    brtype_u64 = insn16.slice(lsb=11, width=3).zext(width=64)
+    simm5_11_s64 = insn16[11:16].sext(width=64)
+    simm5_6_s64 = insn16[6:11].sext(width=64)
+    simm12_s64_c = insn16[4:16].sext(width=64)
+    uimm5_u64 = insn16[6:11].zext(width=64)
+    brtype_u64 = insn16[11:14].zext(width=64)
 
     op = c(OP_INVALID, width=6)
     ln = zero3

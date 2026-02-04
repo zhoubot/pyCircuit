@@ -1,5 +1,7 @@
 #include <cstdint>
+#include <cstdlib>
 #include <deque>
+#include <filesystem>
 #include <iostream>
 
 #include <pyc/cpp/pyc_print.hpp>
@@ -36,6 +38,23 @@ struct Dut {
 int main() {
   Dut dut;
   Testbench<Dut> tb(dut);
+
+  const char *trace_dir_env = std::getenv("PYC_TRACE_DIR");
+  std::filesystem::path out_root = trace_dir_env ? std::filesystem::path(trace_dir_env) : std::filesystem::path("examples/generated");
+  std::filesystem::path out_dir = out_root / "tb_fifo";
+  std::filesystem::create_directories(out_dir);
+
+  tb.enableLog((out_dir / "tb_fifo_cpp.log").string());
+  tb.enableVcd((out_dir / "tb_fifo_cpp.vcd").string(), /*top=*/"tb_fifo");
+  tb.vcdTrace(dut.clk, "clk");
+  tb.vcdTrace(dut.rst, "rst");
+  tb.vcdTrace(dut.in_valid, "in_valid");
+  tb.vcdTrace(dut.in_ready, "in_ready");
+  tb.vcdTrace(dut.in_data, "in_data");
+  tb.vcdTrace(dut.out_valid, "out_valid");
+  tb.vcdTrace(dut.out_ready, "out_ready");
+  tb.vcdTrace(dut.out_data, "out_data");
+
   tb.addClock(dut.clk, /*halfPeriodSteps=*/1);
   tb.reset(dut.rst, /*cyclesAsserted=*/2, /*cyclesDeasserted=*/1);
 
@@ -68,7 +87,7 @@ int main() {
       expected.push_back(dut.in_data.value());
 
     tb.runCycles(1);
-    std::cout << "t=" << tb.timeSteps() << " " << dut.u_fifo << "\n";
+    tb.log() << "t=" << tb.timeSteps() << " " << dut.u_fifo << "\n";
     return true;
   };
 
@@ -100,7 +119,6 @@ int main() {
     return 1;
   }
 
-  std::cout << "OK\n";
+  tb.log() << "OK\n";
   return 0;
 }
-

@@ -16,17 +16,16 @@ def build(m: Circuit, STAGES: int = 3) -> None:
     x = a ^ b
     data = sel.select(sum_, x)
     tag = a.eq(b)
-    lo8 = data.slice(lsb=0, width=8)
+    lo8 = data[0:8]
 
-    fields = m.vec(tag, data, lo8)
-    bus = fields.pack()
+    pkt = m.bundle(tag=tag, data=data, lo8=lo8)
+    bus = pkt.pack()
 
     # Pipeline the packed bus through STAGES registers.
     for _ in range(STAGES):
         bus = m.reg_domain(dom, en, bus, 0).q
 
-    out_fields = fields.unpack(bus)
-    m.output("tag", out_fields[0])
-    m.output("data", out_fields[1])
-    m.output("lo8", out_fields[2])
-
+    out = pkt.unpack(bus)
+    m.output("tag", out["tag"])
+    m.output("data", out["data"])
+    m.output("lo8", out["lo8"])

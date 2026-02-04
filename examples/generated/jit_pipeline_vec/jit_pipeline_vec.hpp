@@ -15,13 +15,22 @@ struct JitPipelineVec {
 
   pyc::cpp::Wire<25> v1{};
   pyc::cpp::Wire<1> v2{};
-  pyc::cpp::Wire<16> v3{};
-  pyc::cpp::Wire<16> v4{};
+  pyc::cpp::Wire<25> v3{};
+  pyc::cpp::Wire<1> v4{};
+  pyc::cpp::Wire<1> en__jit_pipeline_vec__L8{};
+  pyc::cpp::Wire<16> a__jit_pipeline_vec__L10{};
+  pyc::cpp::Wire<16> b__jit_pipeline_vec__L11{};
+  pyc::cpp::Wire<1> sel__jit_pipeline_vec__L12{};
   pyc::cpp::Wire<16> v5{};
-  pyc::cpp::Wire<1> v6{};
-  pyc::cpp::Wire<8> v7{};
-  pyc::cpp::Wire<25> v8{};
-  pyc::cpp::Wire<25> v9{};
+  pyc::cpp::Wire<16> sum___jit_pipeline_vec__L15{};
+  pyc::cpp::Wire<16> v6{};
+  pyc::cpp::Wire<16> x__jit_pipeline_vec__L16{};
+  pyc::cpp::Wire<16> v7{};
+  pyc::cpp::Wire<16> data__jit_pipeline_vec__L17{};
+  pyc::cpp::Wire<1> v8{};
+  pyc::cpp::Wire<1> tag__jit_pipeline_vec__L18{};
+  pyc::cpp::Wire<8> v9{};
+  pyc::cpp::Wire<8> lo8__jit_pipeline_vec__L19{};
   pyc::cpp::Wire<25> v10{};
   pyc::cpp::Wire<25> v11{};
   pyc::cpp::Wire<25> v12{};
@@ -29,11 +38,16 @@ struct JitPipelineVec {
   pyc::cpp::Wire<25> v14{};
   pyc::cpp::Wire<25> v15{};
   pyc::cpp::Wire<25> v16{};
-  pyc::cpp::Wire<1> v17{};
+  pyc::cpp::Wire<25> v17{};
   pyc::cpp::Wire<25> v18{};
+  pyc::cpp::Wire<25> bus__jit_pipeline_vec__L22{};
   pyc::cpp::Wire<25> v19{};
+  pyc::cpp::Wire<25> bus__jit_pipeline_vec__L26{};
   pyc::cpp::Wire<25> v20{};
+  pyc::cpp::Wire<25> bus__jit_pipeline_vec__L26_2{};
   pyc::cpp::Wire<25> v21{};
+  pyc::cpp::Wire<25> bus__jit_pipeline_vec__L26_3{};
+  pyc::cpp::Wire<25> bus__jit_pipeline_vec__L25{};
   pyc::cpp::Wire<8> v22{};
   pyc::cpp::Wire<16> v23{};
   pyc::cpp::Wire<1> v24{};
@@ -46,45 +60,67 @@ struct JitPipelineVec {
   pyc::cpp::pyc_reg<25> v21_inst;
 
   JitPipelineVec() :
-      v19_inst(sys_clk, sys_rst, v17, v18, v16, v19),
-      v20_inst(sys_clk, sys_rst, v17, v19, v16, v20),
-      v21_inst(sys_clk, sys_rst, v17, v20, v16, v21) {
+      v19_inst(sys_clk, sys_rst, en__jit_pipeline_vec__L8, bus__jit_pipeline_vec__L22, v3, v19),
+      v20_inst(sys_clk, sys_rst, en__jit_pipeline_vec__L8, bus__jit_pipeline_vec__L26, v3, v20),
+      v21_inst(sys_clk, sys_rst, en__jit_pipeline_vec__L8, bus__jit_pipeline_vec__L26_2, v3, v21) {
     eval();
   }
 
   inline void eval_comb_0() {
     v1 = pyc::cpp::Wire<25>(0ull);
     v2 = pyc::cpp::Wire<1>(1ull);
-    v3 = (a + b);
-    v4 = (a ^ b);
-    v5 = (sel.toBool() ? v3 : v4);
-    v6 = pyc::cpp::Wire<1>((a == b) ? 1u : 0u);
-    v7 = pyc::cpp::extract<8, 16>(v5, 0u);
-    v8 = pyc::cpp::zext<25, 8>(v7);
-    v9 = (v1 | v8);
-    v10 = pyc::cpp::zext<25, 16>(v5);
-    v11 = pyc::cpp::Wire<25>(v10.value() << 8ull);
-    v12 = (v9 | v11);
-    v13 = pyc::cpp::zext<25, 1>(v6);
-    v14 = pyc::cpp::Wire<25>(v13.value() << 24ull);
-    v15 = (v12 | v14);
-    v16 = v1;
-    v17 = v2;
-    v18 = v15;
+    v3 = v1;
+    v4 = v2;
   }
 
   inline void eval_comb_1() {
-    v22 = pyc::cpp::extract<8, 25>(v21, 0u);
-    v23 = pyc::cpp::extract<16, 25>(v21, 8u);
-    v24 = pyc::cpp::extract<1, 25>(v21, 24u);
+    v10 = pyc::cpp::zext<25, 8>(lo8__jit_pipeline_vec__L19);
+    v11 = (v3 | v10);
+    v12 = pyc::cpp::zext<25, 16>(data__jit_pipeline_vec__L17);
+    v13 = pyc::cpp::Wire<25>(v12.value() << 8ull);
+    v14 = (v11 | v13);
+    v15 = pyc::cpp::zext<25, 1>(tag__jit_pipeline_vec__L18);
+    v16 = pyc::cpp::Wire<25>(v15.value() << 24ull);
+    v17 = (v14 | v16);
+    v18 = v17;
+  }
+
+  inline void eval_comb_2() {
+    v22 = pyc::cpp::extract<8, 25>(bus__jit_pipeline_vec__L25, 0u);
+    v23 = pyc::cpp::extract<16, 25>(bus__jit_pipeline_vec__L25, 8u);
+    v24 = pyc::cpp::extract<1, 25>(bus__jit_pipeline_vec__L25, 24u);
     v25 = v22;
     v26 = v23;
     v27 = v24;
   }
 
-  void eval() {
+  inline void eval_comb_pass() {
     eval_comb_0();
+    en__jit_pipeline_vec__L8 = v4;
+    a__jit_pipeline_vec__L10 = a;
+    b__jit_pipeline_vec__L11 = b;
+    sel__jit_pipeline_vec__L12 = sel;
+    v5 = (a__jit_pipeline_vec__L10 + b__jit_pipeline_vec__L11);
+    sum___jit_pipeline_vec__L15 = v5;
+    v6 = (a__jit_pipeline_vec__L10 ^ b__jit_pipeline_vec__L11);
+    x__jit_pipeline_vec__L16 = v6;
+    v7 = (sel__jit_pipeline_vec__L12.toBool() ? sum___jit_pipeline_vec__L15 : x__jit_pipeline_vec__L16);
+    data__jit_pipeline_vec__L17 = v7;
+    v8 = pyc::cpp::Wire<1>((a__jit_pipeline_vec__L10 == b__jit_pipeline_vec__L11) ? 1u : 0u);
+    tag__jit_pipeline_vec__L18 = v8;
+    v9 = pyc::cpp::extract<8, 16>(data__jit_pipeline_vec__L17, 0u);
+    lo8__jit_pipeline_vec__L19 = v9;
     eval_comb_1();
+    bus__jit_pipeline_vec__L22 = v18;
+    bus__jit_pipeline_vec__L26 = v19;
+    bus__jit_pipeline_vec__L26_2 = v20;
+    bus__jit_pipeline_vec__L26_3 = v21;
+    bus__jit_pipeline_vec__L25 = bus__jit_pipeline_vec__L26_3;
+    eval_comb_2();
+  }
+
+  void eval() {
+    eval_comb_pass();
     tag = v27;
     data = v26;
     lo8 = v25;
