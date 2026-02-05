@@ -6,6 +6,7 @@
 #include <iomanip>
 #include <iostream>
 #include <random>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -21,7 +22,7 @@ using pyc::cpp::Wire;
 namespace {
 
 #ifndef FASTFWD_TOTAL_ENG
-#define FASTFWD_TOTAL_ENG 8
+#define FASTFWD_TOTAL_ENG 4
 #endif
 
 static_assert(FASTFWD_TOTAL_ENG > 0 && FASTFWD_TOTAL_ENG <= 32, "FASTFWD_TOTAL_ENG must be 1..32");
@@ -2033,7 +2034,53 @@ private:
 
 static std::uint64_t parseU64(const char *s) { return static_cast<std::uint64_t>(std::stoull(std::string(s), nullptr, 0)); }
 
-static int runFastFwd(std::uint64_t seed, std::uint64_t maxCycles, std::uint64_t maxPackets, double pMed, double pHeavy) {
+static std::string hexU64(std::uint64_t v, int nibbles) {
+  std::ostringstream oss;
+  oss << std::hex << std::setfill('0') << std::setw(nibbles) << v;
+  return oss.str();
+}
+
+static std::string hex128(Wire<128> v) {
+  std::ostringstream oss;
+  oss << std::hex << std::setfill('0') << std::setw(16) << v.word(1) << std::setw(16) << v.word(0);
+  return oss.str();
+}
+
+static Wire<128> parseHex128(std::string s) {
+  if (s.rfind("0x", 0) == 0 || s.rfind("0X", 0) == 0)
+    s = s.substr(2);
+  if (s.size() > 32) {
+    std::cerr << "ERROR: hex128 literal too wide: " << s << "\n";
+    std::exit(2);
+  }
+  if (s.empty())
+    return Wire<128>(0);
+  if (s.size() < 32)
+    s = std::string(32 - s.size(), '0') + s;
+  const std::string hi_s = s.substr(0, 16);
+  const std::string lo_s = s.substr(16, 16);
+  std::uint64_t hi = static_cast<std::uint64_t>(std::stoull(hi_s, nullptr, 16));
+  std::uint64_t lo = static_cast<std::uint64_t>(std::stoull(lo_s, nullptr, 16));
+  return Wire<128>({lo, hi});
+}
+
+static std::uint64_t parseHexU64(std::string s) {
+  if (s.rfind("0x", 0) == 0 || s.rfind("0X", 0) == 0)
+    s = s.substr(2);
+  if (s.empty())
+    return 0;
+  return static_cast<std::uint64_t>(std::stoull(s, nullptr, 16));
+}
+
+static int runFastFwd(
+    std::uint64_t seed,
+    std::uint64_t maxCycles,
+    std::uint64_t maxPackets,
+    double pMed,
+    double pHeavy,
+    const std::string &stimPath,
+    const std::string &stimOutPath,
+    const std::string &outTracePath) {
   pyc::gen::FastFwd dut{};
   Testbench<pyc::gen::FastFwd> tb(dut);
 
@@ -2046,6 +2093,41 @@ static int runFastFwd(std::uint64_t seed, std::uint64_t maxCycles, std::uint64_t
       trace_dir_env ? std::filesystem::path(trace_dir_env) : std::filesystem::path("examples/generated/fastfwd_pyc");
   if (trace_log || trace_vcd || trace_konata)
     std::filesystem::create_directories(out_dir);
+
+  std::ifstream stim_in{};
+  bool use_stim = false;
+  if (!stimPath.empty()) {
+    stim_in.open(stimPath);
+    if (!stim_in.is_open()) {
+      std::cerr << "ERROR: failed to open --stim: " << stimPath << "\n";
+      return 2;
+    }
+    use_stim = true;
+  }
+
+  std::ofstream stim_out{};
+  if (!stimOutPath.empty()) {
+    std::filesystem::path p = stimOutPath;
+    if (p.has_parent_path())
+      std::filesystem::create_directories(p.parent_path());
+    stim_out.open(stimOutPath, std::ios::out | std::ios::trunc);
+    if (!stim_out.is_open()) {
+      std::cerr << "ERROR: failed to open --stim-out: " << stimOutPath << "\n";
+      return 2;
+    }
+  }
+
+  std::ofstream out_trace{};
+  if (!outTracePath.empty()) {
+    std::filesystem::path p = outTracePath;
+    if (p.has_parent_path())
+      std::filesystem::create_directories(p.parent_path());
+    out_trace.open(outTracePath, std::ios::out | std::ios::trunc);
+    if (!out_trace.is_open()) {
+      std::cerr << "ERROR: failed to open --out-trace: " << outTracePath << "\n";
+      return 2;
+    }
+  }
 
   if (trace_log) {
     tb.enableLog((out_dir / "tb_fastfwd_pyc_cpp.log").string());
@@ -2116,6 +2198,7 @@ static int runFastFwd(std::uint64_t seed, std::uint64_t maxCycles, std::uint64_t
   std::uint64_t got = 0;
   std::uint64_t bkprCycles = 0;
   int outPtr = 0; // Next expected output lane (cyclic lane0->lane3->lane0...)
+  std::uint64_t outIndex = 0;
 
   // Main loop: drive stimulus on the low phase, then take a posedge+negedge.
   std::uint64_t simCycle = 0;
@@ -2153,13 +2236,76 @@ static int runFastFwd(std::uint64_t seed, std::uint64_t maxCycles, std::uint64_t
     }
 
     // Drive PKTIN for this cycle (only when not backpressured).
+    bool laneVld[4]{false, false, false, false};
+    Wire<128> laneData[4]{Wire<128>(0), Wire<128>(0), Wire<128>(0), Wire<128>(0)};
+    Wire<5> laneCtrl[4]{Wire<5>(0), Wire<5>(0), Wire<5>(0), Wire<5>(0)};
     for (int lane = 0; lane < 4; lane++) {
       lanePktInVld(dut, lane) = Wire<1>(0);
       lanePktInData(dut, lane) = Wire<128>(0);
       lanePktInCtrl(dut, lane) = Wire<5>(0);
     }
 
-    if (!bkpr && simCycle < maxCycles && sent < maxPackets) {
+    if (use_stim && simCycle < maxCycles) {
+      std::string line;
+      if (std::getline(stim_in, line)) {
+        std::istringstream iss(line);
+        std::uint64_t fileCycle = 0;
+        std::uint64_t fileBkpr = 0;
+        if (!(iss >> fileCycle >> fileBkpr)) {
+          std::cerr << "ERROR: malformed stim line at cyc=" << simCycle << "\n";
+          return 2;
+        }
+        if (fileCycle != simCycle) {
+          std::cerr << "ERROR: stim cycle mismatch: expected=" << simCycle << " got=" << fileCycle << "\n";
+          return 2;
+        }
+        if (fileBkpr != (bkpr ? 1u : 0u)) {
+          std::cerr << "ERROR: bkpr mismatch at cyc=" << simCycle << " stim=" << fileBkpr << " dut=" << (bkpr ? 1 : 0) << "\n";
+          return 2;
+        }
+
+        for (int lane = 0; lane < 4; lane++) {
+          std::uint64_t v = 0;
+          std::string data_s;
+          std::string ctrl_s;
+          if (!(iss >> v >> data_s >> ctrl_s)) {
+            std::cerr << "ERROR: malformed stim lane at cyc=" << simCycle << " lane=" << lane << "\n";
+            return 2;
+          }
+          laneVld[lane] = (v != 0);
+          laneData[lane] = parseHex128(data_s);
+          laneCtrl[lane] = Wire<5>(parseHexU64(ctrl_s) & 0x1Fu);
+        }
+
+        // Apply + build expected model.
+        for (int lane = 0; lane < 4; lane++) {
+          if (!laneVld[lane])
+            continue;
+          if (sent >= maxPackets) {
+            std::cerr << "ERROR: stim inject exceeds maxPackets at cyc=" << simCycle << "\n";
+            return 2;
+          }
+          if (bkpr) {
+            std::cerr << "ERROR: stim inject while backpressured at cyc=" << simCycle << "\n";
+            return 2;
+          }
+          std::uint64_t seq = sent;
+          std::uint64_t ctrl = laneCtrl[lane].value() & 0x1Fu;
+          std::uint64_t dep = (ctrl >> 2u) & 0x7u;
+          if (dep != 0 && seq < dep) {
+            std::cerr << "ERROR: invalid dep at cyc=" << simCycle << " seq=" << seq << " dep=" << dep << "\n";
+            return 2;
+          }
+          Wire<128> dp_data = (dep != 0) ? expectedBySeq[static_cast<std::size_t>(seq - dep)] : Wire<128>(0);
+          Wire<128> fwded = laneData[lane] + dp_data;
+          expectedBySeq.push_back(fwded);
+          expectedOut.push_back(ExpectedPkt{seq, fwded});
+          sent++;
+        }
+      } else {
+        // EOF: stop injecting, drain only.
+      }
+    } else if (!bkpr && simCycle < maxCycles && sent < maxPackets) {
       bool doSend[4]{};
       for (int lane = 0; lane < 4; lane++) {
         bool heavy = (simCycle >= (maxCycles / 2));
@@ -2207,15 +2353,31 @@ static int runFastFwd(std::uint64_t seed, std::uint64_t maxCycles, std::uint64_t
             konata.dep(seq, seq - dep, /*type=*/0);
         }
 
-        lanePktInVld(dut, lane) = Wire<1>(1);
-        lanePktInData(dut, lane) = data;
-        lanePktInCtrl(dut, lane) = Wire<5>(ctrl);
+        laneVld[lane] = true;
+        laneData[lane] = data;
+        laneCtrl[lane] = Wire<5>(ctrl);
 
         if (trace_log) {
           tb.log() << "[in]  cyc=" << dutCycle << " lane=" << lane << " seq=" << seq << " lat=" << (lat + 1u)
                    << " dep=" << dep << "\n";
         }
       }
+    }
+
+    for (int lane = 0; lane < 4; lane++) {
+      if (laneVld[lane]) {
+        lanePktInVld(dut, lane) = Wire<1>(1);
+        lanePktInData(dut, lane) = laneData[lane];
+        lanePktInCtrl(dut, lane) = laneCtrl[lane];
+      }
+    }
+
+    if (stim_out.is_open() && simCycle < maxCycles) {
+      stim_out << simCycle << " " << (bkpr ? 1 : 0);
+      for (int lane = 0; lane < 4; lane++) {
+        stim_out << " " << (laneVld[lane] ? 1 : 0) << " " << hex128(laneData[lane]) << " " << hexU64(laneCtrl[lane].value() & 0x1Fu, 2);
+      }
+      stim_out << "\n";
     }
 
     // Evaluate combinational logic, capture FE inputs, then step posedge.
@@ -2326,6 +2488,11 @@ static int runFastFwd(std::uint64_t seed, std::uint64_t maxCycles, std::uint64_t
         return 1;
       }
       got++;
+      if (out_trace.is_open()) {
+        // Log in terms of the "post-posedge" cycle index to match the SV TB's notion of cycle.
+        out_trace << outIndex << " " << (simCycle + 1u) << " " << ptr << " " << exp.seq << " " << hex128(out) << "\n";
+        outIndex++;
+      }
       if (trace_konata && konata.isOpen()) {
         std::uint64_t seq = exp.seq;
         if (seq < maxPackets) {
@@ -2384,6 +2551,9 @@ int main(int argc, char **argv) {
   std::uint64_t seed = 1;
   std::uint64_t cycles = 20000;
   std::uint64_t packets = 60000;
+  std::string stim_path{};
+  std::string stim_out_path{};
+  std::string out_trace_path{};
 
   for (int i = 1; i < argc; i++) {
     std::string a(argv[i]);
@@ -2399,8 +2569,22 @@ int main(int argc, char **argv) {
       packets = parseU64(argv[++i]);
       continue;
     }
+    if (a == "--stim" && i + 1 < argc) {
+      stim_path = argv[++i];
+      continue;
+    }
+    if (a == "--stim-out" && i + 1 < argc) {
+      stim_out_path = argv[++i];
+      continue;
+    }
+    if (a == "--out-trace" && i + 1 < argc) {
+      out_trace_path = argv[++i];
+      continue;
+    }
     if (a == "-h" || a == "--help") {
-      std::cout << "Usage: " << argv[0] << " [--seed N] [--cycles N] [--packets N]\n";
+      std::cout << "Usage: " << argv[0]
+                << " [--seed N] [--cycles N] [--packets N]"
+                << " [--stim path] [--stim-out path] [--out-trace path]\n";
       return 0;
     }
     std::cerr << "error: unknown arg: " << a << "\n";
@@ -2408,5 +2592,5 @@ int main(int argc, char **argv) {
   }
 
   // Match the published load: 41.7% then 90% (approx via per-lane Bernoulli).
-  return runFastFwd(seed, cycles, packets, /*pMed=*/0.417, /*pHeavy=*/0.90);
+  return runFastFwd(seed, cycles, packets, /*pMed=*/0.417, /*pHeavy=*/0.90, stim_path, stim_out_path, out_trace_path);
 }

@@ -13,6 +13,7 @@ Docs:
 - `docs/USAGE.md` (how to write designs; JIT rules; debug/tracing)
 - `docs/IR_SPEC.md` (PYC dialect contract)
 - `docs/PRIMITIVES.md` (backend template “ABI”: matching C++/Verilog primitives)
+- `docs/VERILOG_FLOW.md` (open-source Verilog sim/lint with Icarus/Verilator/GTKWave)
 
 ## Design goals (why this repo exists)
 
@@ -125,6 +126,10 @@ Regenerate the checked-in golden outputs under `examples/generated/`:
 ```bash
 scripts/pyc regen
 ```
+
+## Open-source Verilog simulation (Icarus / Verilator)
+
+See `docs/VERILOG_FLOW.md`.
 
 ## LinxISA CPU bring-up (example)
 

@@ -34,7 +34,7 @@ module EXAM2021_TOP(
   output [127:0] lane3_pkt_out_data,
   output reg pkt_in_bkpr
 );
-  localparam integer N_FE = 8;
+  localparam integer N_FE = 4;
 
   wire rst;
   assign rst = ~rst_n;
@@ -74,14 +74,6 @@ module EXAM2021_TOP(
     .fwded2_pkt_data(fwded_pkt_data[2*128+127:2*128]),
     .fwded3_pkt_data_vld(fwded_pkt_data_vld[3]),
     .fwded3_pkt_data(fwded_pkt_data[3*128+127:3*128]),
-    .fwded4_pkt_data_vld(fwded_pkt_data_vld[4]),
-    .fwded4_pkt_data(fwded_pkt_data[4*128+127:4*128]),
-    .fwded5_pkt_data_vld(fwded_pkt_data_vld[5]),
-    .fwded5_pkt_data(fwded_pkt_data[5*128+127:5*128]),
-    .fwded6_pkt_data_vld(fwded_pkt_data_vld[6]),
-    .fwded6_pkt_data(fwded_pkt_data[6*128+127:6*128]),
-    .fwded7_pkt_data_vld(fwded_pkt_data_vld[7]),
-    .fwded7_pkt_data(fwded_pkt_data[7*128+127:7*128]),
     .pkt_in_bkpr(pkt_in_bkpr_w),
     .lane0_pkt_out_vld(lane0_pkt_out_vld),
     .lane0_pkt_out_data(lane0_pkt_out_data),
@@ -110,27 +102,7 @@ module EXAM2021_TOP(
     .fwd3_pkt_data(fwd_pkt_data[3*128+127:3*128]),
     .fwd3_pkt_lat(fwd_pkt_lat[3*2+1:3*2]),
     .fwd3_pkt_dp_vld(fwd_pkt_dp_vld[3]),
-    .fwd3_pkt_dp_data(fwd_pkt_dp_data[3*128+127:3*128]),
-    .fwd4_pkt_data_vld(fwd_pkt_data_vld[4]),
-    .fwd4_pkt_data(fwd_pkt_data[4*128+127:4*128]),
-    .fwd4_pkt_lat(fwd_pkt_lat[4*2+1:4*2]),
-    .fwd4_pkt_dp_vld(fwd_pkt_dp_vld[4]),
-    .fwd4_pkt_dp_data(fwd_pkt_dp_data[4*128+127:4*128]),
-    .fwd5_pkt_data_vld(fwd_pkt_data_vld[5]),
-    .fwd5_pkt_data(fwd_pkt_data[5*128+127:5*128]),
-    .fwd5_pkt_lat(fwd_pkt_lat[5*2+1:5*2]),
-    .fwd5_pkt_dp_vld(fwd_pkt_dp_vld[5]),
-    .fwd5_pkt_dp_data(fwd_pkt_dp_data[5*128+127:5*128]),
-    .fwd6_pkt_data_vld(fwd_pkt_data_vld[6]),
-    .fwd6_pkt_data(fwd_pkt_data[6*128+127:6*128]),
-    .fwd6_pkt_lat(fwd_pkt_lat[6*2+1:6*2]),
-    .fwd6_pkt_dp_vld(fwd_pkt_dp_vld[6]),
-    .fwd6_pkt_dp_data(fwd_pkt_dp_data[6*128+127:6*128]),
-    .fwd7_pkt_data_vld(fwd_pkt_data_vld[7]),
-    .fwd7_pkt_data(fwd_pkt_data[7*128+127:7*128]),
-    .fwd7_pkt_lat(fwd_pkt_lat[7*2+1:7*2]),
-    .fwd7_pkt_dp_vld(fwd_pkt_dp_vld[7]),
-    .fwd7_pkt_dp_data(fwd_pkt_dp_data[7*128+127:7*128])
+    .fwd3_pkt_dp_data(fwd_pkt_dp_data[3*128+127:3*128])
   );
 
   // Keep the exam-style BKPR port type (output reg).

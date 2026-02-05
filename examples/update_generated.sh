@@ -12,6 +12,8 @@ mkdir -p "${OUT_ROOT}"
 emit_one() {
   local name="$1"
   local src="$2"
+  shift 2
+  local emit_args=("$@")
   local outdir="${OUT_ROOT}/${name}"
 
   mkdir -p "${outdir}"
@@ -21,8 +23,13 @@ emit_one() {
   local tmp_pyc
   tmp_pyc="$(mktemp -t "pycircuit.${name}.pyc")"
 
-  PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="$(pyc_pythonpath):${ROOT_DIR}" \
-    python3 -m pycircuit.cli emit "${src}" -o "${tmp_pyc}"
+  local emit_cmd=(python3 -m pycircuit.cli emit "${src}")
+  if (( ${#emit_args[@]} )); then
+    emit_cmd+=("${emit_args[@]}")
+  fi
+  emit_cmd+=(-o "${tmp_pyc}")
+
+  PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="$(pyc_pythonpath):${ROOT_DIR}" "${emit_cmd[@]}"
   "${PYC_COMPILE}" "${tmp_pyc}" --emit=verilog -o "${outdir}/${name}.v"
   "${PYC_COMPILE}" "${tmp_pyc}" --emit=cpp -o "${outdir}/${name}.hpp"
 }
@@ -36,7 +43,19 @@ emit_one wire_ops "${ROOT_DIR}/examples/wire_ops.py"
 emit_one jit_control_flow "${ROOT_DIR}/examples/jit_control_flow.py"
 emit_one jit_pipeline_vec "${ROOT_DIR}/examples/jit_pipeline_vec.py"
 emit_one jit_cache "${ROOT_DIR}/examples/jit_cache.py"
-emit_one fastfwd_pyc "${ROOT_DIR}/examples/fastfwd_pyc/fastfwd_pyc.py"
+
+# FastFwd: allow overriding FE count at JIT time.
+# Example:
+#   FASTFWD_N_FE=8 bash examples/update_generated.sh
+FASTFWD_EMIT_ARGS=()
+if [[ -n "${FASTFWD_N_FE:-}" ]]; then
+  FASTFWD_EMIT_ARGS+=(--param "N_FE=${FASTFWD_N_FE}")
+fi
+if (( ${#FASTFWD_EMIT_ARGS[@]} )); then
+  emit_one fastfwd_pyc "${ROOT_DIR}/examples/fastfwd_pyc/fastfwd_pyc.py" "${FASTFWD_EMIT_ARGS[@]}"
+else
+  emit_one fastfwd_pyc "${ROOT_DIR}/examples/fastfwd_pyc/fastfwd_pyc.py"
+fi
 
 # LinxISA CPU (pyCircuit).
 emit_one linx_cpu_pyc "${ROOT_DIR}/examples/linx_cpu_pyc/linx_cpu_pyc.py"

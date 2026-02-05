@@ -163,7 +163,10 @@ def _hist_shift_insert(hist: _Hist, *, k: Wire, seqs: list[Wire], datas: list[Wi
 
 def _build_fastfwd(
     m: Circuit,
-    ENG_PER_LANE: int = 2,
+    # Total number of Forwarding Engines (FE). Must be a multiple of 4 (one pool per lane).
+    # If set, it overrides ENG_PER_LANE.
+    N_FE: int | None = None,
+    ENG_PER_LANE: int = 1,
     LANE_Q_DEPTH: int = 16,
     ENG_Q_DEPTH: int = 4,
     ROB_DEPTH: int = 16,
@@ -173,12 +176,22 @@ def _build_fastfwd(
     BKPR_SLACK: int = 1,
 ) -> None:
     # ---- parameters (JIT-time) ----
-    eng_per_lane = int(ENG_PER_LANE)
-    if eng_per_lane <= 0:
-        raise ValueError("ENG_PER_LANE must be > 0")
-    total_eng = 4 * eng_per_lane
-    if total_eng > 32:
-        raise ValueError("total engines must be <= 32")
+    if N_FE is not None:
+        total_eng = int(N_FE)
+        if total_eng <= 0:
+            raise ValueError("N_FE must be > 0")
+        if total_eng > 32:
+            raise ValueError("N_FE must be <= 32")
+        if (total_eng % 4) != 0:
+            raise ValueError("N_FE must be a multiple of 4 (one engine pool per lane)")
+        eng_per_lane = total_eng // 4
+    else:
+        eng_per_lane = int(ENG_PER_LANE)
+        if eng_per_lane <= 0:
+            raise ValueError("ENG_PER_LANE must be > 0")
+        total_eng = 4 * eng_per_lane
+        if total_eng > 32:
+            raise ValueError("total engines must be <= 32")
 
     lane_q_depth = int(LANE_Q_DEPTH)
     eng_q_depth = int(ENG_Q_DEPTH)
@@ -409,8 +422,9 @@ def _build_fastfwd(
                 q_any_free = q_any_free | free
                 q_chosen[k] = take
 
-            q_can = qv & q_dep_ok & q_any_free
             q_delta = (q_seq - exp_seq[lane].out()) >> 2
+            q_in_range = q_delta.ult(rob_depth)
+            q_can = qv & q_dep_ok & q_any_free & q_in_range
 
             # ---- choose best candidate among stash window + queue head ----
             best_v = m.const(0, width=1)
@@ -449,8 +463,9 @@ def _build_fastfwd(
                     any_free = any_free | free
                     chosen[k] = take
 
-                can = sv & dep_ok & any_free
                 delta = (seq_i - exp_seq[lane].out()) >> 2
+                in_range = delta.ult(rob_depth)
+                can = sv & dep_ok & any_free & in_range
 
                 better = can & (~best_v | delta.ult(best_delta))
                 best_v = best_v | better
@@ -502,7 +517,10 @@ def _build_fastfwd(
                 stash_free = stash_free | ~stash_v_mid[s]
 
             q_pop_dispatch = best_v & best_is_q
-            q_stash_pop = qv & ~q_can & stash_free
+            # If the queue head is already out of ROB range, later entries are even
+            # further out-of-range; stashing would only consume the window and
+            # risk deadlock. Stall instead and let BKPR regulate input.
+            q_stash_pop = qv & ~q_can & stash_free & q_in_range
             q_pop = issue_q[lane].pop(when=q_pop_dispatch | q_stash_pop)
             lane_pop[lane] = q_pop.fire
 
@@ -774,8 +792,12 @@ def _build_fastfwd(
 
 def build(
     m: Circuit,
-    # Defaults tuned via `tools/dse_fastfwd_pyc.sh` for balanced throughput/area.
-    ENG_PER_LANE: int = 2,
+    # Total number of Forwarding Engines (FE). Must be a multiple of 4.
+    # This is the recommended knob when instantiating FE internally in the exam wrapper.
+    N_FE: int | None = None,
+    # Defaults are chosen to match the common exam-style wrapper (4 engines total).
+    # For PPA sweeps, override via `--param` or use `tools/dse_fastfwd_pyc.sh`.
+    ENG_PER_LANE: int = 1,
     LANE_Q_DEPTH: int = 16,
     ENG_Q_DEPTH: int = 4,
     ROB_DEPTH: int = 16,
@@ -787,6 +809,7 @@ def build(
     # Wrapper kept tiny so the AST/JIT compiler executes the implementation as Python.
     _build_fastfwd(
         m,
+        N_FE=N_FE,
         ENG_PER_LANE=ENG_PER_LANE,
         LANE_Q_DEPTH=LANE_Q_DEPTH,
         ENG_Q_DEPTH=ENG_Q_DEPTH,

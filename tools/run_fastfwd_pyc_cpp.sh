@@ -67,9 +67,19 @@ trap 'rm -rf "${WORK_DIR}"' EXIT
 cd "${ROOT_DIR}"
 
 EMIT_ARGS=()
-ENG_PER_LANE=2
+N_FE=""
+ENG_PER_LANE=1
 if (( ${#PARAMS[@]} )); then
   for p in "${PARAMS[@]}"; do
+    if [[ "${p}" == N_FE=* ]]; then
+      raw="${p#N_FE=}"
+      if [[ "${raw}" =~ ^[0-9]+$ ]]; then
+        N_FE="${raw}"
+      else
+        echo "error: --param N_FE expects an integer, got: ${raw}" >&2
+        exit 2
+      fi
+    fi
     if [[ "${p}" == ENG_PER_LANE=* ]]; then
       raw="${p#ENG_PER_LANE=}"
       if [[ "${raw}" =~ ^[0-9]+$ ]]; then
@@ -97,6 +107,9 @@ if (( STATS )); then
 fi
 
 FASTFWD_TOTAL_ENG="$(( 4 * ENG_PER_LANE ))"
+if [[ -n "${N_FE}" ]]; then
+  FASTFWD_TOTAL_ENG="${N_FE}"
+fi
 
 "${CXX:-clang++}" -std=c++17 -O2 -DFASTFWD_TOTAL_ENG="${FASTFWD_TOTAL_ENG}" \
   -I "${ROOT_DIR}/include" \

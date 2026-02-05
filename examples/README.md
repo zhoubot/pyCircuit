@@ -19,6 +19,17 @@ Then compile to Verilog:
 ../build/bin/pyc-compile /tmp/counter.pyc --emit=verilog -o /tmp/counter.v
 ```
 
+## Verilog simulation (open-source)
+
+See `docs/VERILOG_FLOW.md`, or run directly:
+
+```bash
+python3 ../tools/pyc_flow.py verilog-sim fastfwd_pyc +max_cycles=500 +max_pkts=1000 +seed=1
+python3 ../tools/pyc_flow.py verilog-sim issue_queue_2picker
+python3 ../tools/pyc_flow.py verilog-sim linx_cpu_pyc --tool verilator \
+  +memh=examples/linx_cpu/programs/test_or.memh +expected=0000ff00
+```
+
 ## Checked-in generated outputs
 
 This repo checks in generated outputs under `examples/generated/`:
@@ -35,6 +46,18 @@ bash update_generated.sh          # examples only
 - `fastfwd_pyc.v`: `FastFwd` core netlist (has FEIN/FEOUT ports)
 - `exam2021_top.v`: `EXAM2021_TOP` wrapper that instantiates `FE` internally and exposes only PKTIN/PKTOUT/BKPR
 - `fe.v`: a small FE stub model (replace with the official exam `fe.v` / `fe.v.e` RTL when integrating)
+
+Important:
+- The number of instantiated `FE` blocks **must match** the `FastFwd` core’s FE port count (`fwded0..N-1` / `fwd0..N-1`).
+- Don’t hand-edit `N_FE` unless you also regenerate the core with the same engine count (otherwise the design will stall waiting for missing completions and you’ll see “no output”).
+- `bash examples/update_generated.sh` auto-detects the FE count in `fastfwd_pyc.v` and regenerates a matching `exam2021_top.v`.
+
+To change the FE count:
+
+```bash
+# Example: build FastFwd with 8 FEs (4 lanes × 2 engines/lane)
+FASTFWD_N_FE=8 bash examples/update_generated.sh
+```
 
 ## Debug traces
 

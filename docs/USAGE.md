@@ -55,6 +55,7 @@ You can override JIT parameters from the CLI (repeat `--param` as needed):
 
 ```bash
 PYTHONPATH=python python3 -m pycircuit.cli emit examples/fastfwd_pyc/fastfwd_pyc.py \
+  --param N_FE=8 \
   --param LANE_Q_DEPTH=64 --param ROB_DEPTH=32 \
   -o /tmp/fastfwd.pyc
 ```
@@ -258,6 +259,9 @@ Generated Verilog/C++ tries to keep readable identifiers:
 - VCD dump by default (disable with `+notrace`)
 - log file by default (disable with `+nolog`)
 - output paths override: `+vcd=<path>` / `+log=<path>`
+
+For running the generated Verilog through open-source tools (Icarus/Verilator/GTKWave),
+see `docs/VERILOG_FLOW.md`.
 
 ---
 
