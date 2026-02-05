@@ -143,6 +143,29 @@ Optional debug artifacts:
 - `PYC_VCD=1` enables VCD dumping
 - `PYC_TRACE_DIR=/path/to/out` overrides the output directory
 
+Override boot PC manually if needed:
+
+```bash
+PYC_BOOT_PC=0x10000 bash tools/run_linx_cpu_pyc_cpp.sh --memh examples/linx_cpu/programs/test_or.memh
+```
+
+Report + trace outputs (C++ TB):
+
+- The C++ testbench prints a LinxISA-style report by default (cycles/committed/uop breakdown).
+- Konata pipeview (O3PipeView): pass `-p1` (or `--pipeview 1`) and optionally `--pipfile /path/to/pipeview.log`.
+- Perfetto swimlane trace: pass `--swimlane 1` and optionally `--swimfile /path/to/swimlane.trace.json`.
+
+Example (memh + report + pipeview + swimlane):
+
+```bash
+bash tools/run_linx_cpu_pyc_cpp.sh --memh examples/linx_cpu/programs/test_or.memh \
+  -p1 --pipfile pipeview/test_or.log \
+  --swimlane 1 --swimfile swimlane/test_or.trace.json
+```
+
+If you run the TB binary directly, `-f` is an alias for `--memh` and you can also pass
+`--expected` / `--expected-a0` for quick checks.
+
 ## Packaging (release tarball)
 
 After building, you can install + package the toolchain:

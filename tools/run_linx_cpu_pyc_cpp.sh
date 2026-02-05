@@ -13,6 +13,7 @@ EXPECTED=""
 ELF_TEXT_BASE="0x10000"
 ELF_DATA_BASE="0x20000"
 ELF_PAGE_ALIGN="0x1000"
+TB_ARGS=()
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -44,6 +45,18 @@ while [[ $# -gt 0 ]]; do
       ELF_PAGE_ALIGN="${2:?missing value for --page-align}"
       shift 2
       ;;
+    -p)
+      TB_ARGS+=("-p" "${2:?missing value for -p}")
+      shift 2
+      ;;
+    -p1)
+      TB_ARGS+=("-p1")
+      shift 1
+      ;;
+    --pipeview|--pipfile|--swimlane|--swimfile|--boot-pc)
+      TB_ARGS+=("$1" "${2:?missing value for $1}")
+      shift 2
+      ;;
     -h|--help)
       cat <<EOF
 Usage:
@@ -56,6 +69,14 @@ ELF options:
   --text-base <addr>  (default: 0x10000)
   --data-base <addr>  (default: 0x20000)
   --page-align <addr> (default: 0x1000)
+
+Trace export options (forwarded to the C++ TB):
+  -p1                  Enable Konata pipeview (O3PipeView)
+  --pipeview <0|1>      Enable/disable pipeview
+  --pipfile <path>      Pipeview output path (default: pipeview.log)
+  --swimlane <0|1>      Enable/disable Perfetto swimlane trace
+  --swimfile <path>     Swimlane output path (default: swimlane.trace.json)
+  --boot-pc <addr>      Override boot PC for the TB (also supports PYC_BOOT_PC env)
 EOF
       exit 0
       ;;
@@ -84,7 +105,17 @@ PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="$(pyc_pythonpath)" \
 
 "${PYC_COMPILE}" "${WORK_DIR}/linx_cpu_pyc.pyc" --emit=cpp -o "${WORK_DIR}/linx_cpu_pyc_gen.hpp"
 
-"${CXX:-clang++}" -std=c++17 -O2 \
+CXX="${CXX:-clang++}"
+if ! command -v "${CXX}" >/dev/null 2>&1; then
+  if command -v g++ >/dev/null 2>&1; then
+    CXX="g++"
+  else
+    echo "error: missing C++ compiler (clang++ or g++)" >&2
+    exit 1
+  fi
+fi
+
+"${CXX}" -std=c++17 -O2 \
   -I "${ROOT_DIR}/include" \
   -I "${WORK_DIR}" \
   -o "${WORK_DIR}/tb_linx_cpu_pyc" \
@@ -92,10 +123,10 @@ PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="$(pyc_pythonpath)" \
 
 if [[ -n "${MEMH}" ]]; then
   if [[ -n "${EXPECTED}" ]]; then
-    "${WORK_DIR}/tb_linx_cpu_pyc" "${MEMH}" "${EXPECTED}"
+    "${WORK_DIR}/tb_linx_cpu_pyc" "${TB_ARGS[@]}" "${MEMH}" "${EXPECTED}"
   else
-    "${WORK_DIR}/tb_linx_cpu_pyc" "${MEMH}"
+    "${WORK_DIR}/tb_linx_cpu_pyc" "${TB_ARGS[@]}" "${MEMH}"
   fi
 else
-  "${WORK_DIR}/tb_linx_cpu_pyc"
+  "${WORK_DIR}/tb_linx_cpu_pyc" "${TB_ARGS[@]}"
 fi

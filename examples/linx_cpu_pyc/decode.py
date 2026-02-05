@@ -24,6 +24,7 @@ from .isa import (
     OP_C_SETRET,
     OP_C_SWI,
     OP_EBREAK,
+    OP_FENTRY,
     OP_HL_LUI,
     OP_INVALID,
     OP_LWI,
@@ -279,6 +280,11 @@ def decode_window(m: Circuit, window: Wire) -> Decode:
         regdst = rd32
         srcl = rs1_32
         srcr = rs2_32
+
+    cond = in32 & masked_eq(insn32, mask=0x0000707F, match=0x00000041)
+    if cond:
+        op = OP_FENTRY
+        len_bytes = 4
 
     cond = in32 & masked_eq(insn32, mask=0xF0FFFFFF, match=0x0010102B)
     if cond:
