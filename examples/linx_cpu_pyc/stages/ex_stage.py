@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from pycircuit import Circuit, Wire, jit_inline
+from pycircuit import CycleAwareCircuit, CycleAwareSignal, mux
 
 from ..isa import (
     OP_ADDTPC,
@@ -32,257 +32,154 @@ from ..pipeline import ExMemRegs, IdExRegs
 from ..util import Consts
 
 
-@jit_inline
-def build_ex_stage(m: Circuit, *, do_ex: Wire, pc: Wire, idex: IdExRegs, exmem: ExMemRegs, consts: Consts) -> None:
-    with m.scope("EX"):
-        z1 = consts.zero1
-        z3 = consts.zero3
-        z64 = consts.zero64
+def build_ex_stage(
+    m: CycleAwareCircuit,
+    *,
+    do_ex: CycleAwareSignal,
+    pc: CycleAwareSignal,
+    idex: IdExRegs,
+    exmem: ExMemRegs,
+    consts: Consts,
+) -> None:
+    z1 = consts.zero1
+    z3 = consts.zero3
+    z64 = consts.zero64
+    one64 = consts.one64
 
-        # Stage inputs.
-        pc = pc.out()
-        op = idex.op.out()
-        len_bytes = idex.len_bytes.out()
-        regdst = idex.regdst.out()
-        srcl_val = idex.srcl_val.out()
-        srcr_val = idex.srcr_val.out()
-        srcp_val = idex.srcp_val.out()
-        imm = idex.imm.out()
+    # Stage inputs.
+    pc_val = pc
+    op = idex.op.out()
+    len_bytes = idex.len_bytes.out()
+    regdst = idex.regdst.out()
+    srcl_val = idex.srcl_val.out()
+    srcr_val = idex.srcr_val.out()
+    srcp_val = idex.srcp_val.out()
+    imm = idex.imm.out()
 
-        op_c_bstart_std = op == OP_C_BSTART_STD
-        op_c_bstart_cond = op == OP_C_BSTART_COND
-        op_bstart_std_call = op == OP_BSTART_STD_CALL
-        op_c_movr = op == OP_C_MOVR
-        op_c_movi = op == OP_C_MOVI
-        op_c_setret = op == OP_C_SETRET
-        op_c_setc_eq = op == OP_C_SETC_EQ
-        op_c_setc_tgt = op == OP_C_SETC_TGT
-        op_addtpc = op == OP_ADDTPC
-        op_addi = op == OP_ADDI
-        op_subi = op == OP_SUBI
-        op_addiw = op == OP_ADDIW
-        op_addw = op == OP_ADDW
-        op_orw = op == OP_ORW
-        op_andw = op == OP_ANDW
-        op_xorw = op == OP_XORW
-        op_cmp_eq = op == OP_CMP_EQ
-        op_csel = op == OP_CSEL
-        op_hl_lui = op == OP_HL_LUI
-        op_lwi = op == OP_LWI
-        op_c_lwi = op == OP_C_LWI
-        op_swi = op == OP_SWI
-        op_c_swi = op == OP_C_SWI
-        op_sdi = op == OP_SDI
+    op_c_bstart_std = op.eq(OP_C_BSTART_STD)
+    op_c_bstart_cond = op.eq(OP_C_BSTART_COND)
+    op_bstart_std_call = op.eq(OP_BSTART_STD_CALL)
+    op_c_movr = op.eq(OP_C_MOVR)
+    op_c_movi = op.eq(OP_C_MOVI)
+    op_c_setret = op.eq(OP_C_SETRET)
+    op_c_setc_eq = op.eq(OP_C_SETC_EQ)
+    op_c_setc_tgt = op.eq(OP_C_SETC_TGT)
+    op_addtpc = op.eq(OP_ADDTPC)
+    op_addi = op.eq(OP_ADDI)
+    op_subi = op.eq(OP_SUBI)
+    op_addiw = op.eq(OP_ADDIW)
+    op_addw = op.eq(OP_ADDW)
+    op_orw = op.eq(OP_ORW)
+    op_andw = op.eq(OP_ANDW)
+    op_xorw = op.eq(OP_XORW)
+    op_cmp_eq = op.eq(OP_CMP_EQ)
+    op_csel = op.eq(OP_CSEL)
+    op_hl_lui = op.eq(OP_HL_LUI)
+    op_lwi = op.eq(OP_LWI)
+    op_c_lwi = op.eq(OP_C_LWI)
+    op_swi = op.eq(OP_SWI)
+    op_c_swi = op.eq(OP_C_SWI)
+    op_sdi = op.eq(OP_SDI)
 
-        off = imm.shl(amount=2)
+    off = imm.shl(amount=2)
 
-        alu = z64
-        is_load = z1
-        is_store = z1
-        size = z3
-        addr = z64
-        wdata = z64
+    # Default values
+    alu = z64
+    is_load = z1
+    is_store = z1
+    size = z3
+    addr = z64
+    wdata = z64
 
-        # Block markers: forward imm through ALU (used for control-state updates in WB).
-        if op_c_bstart_std | op_c_bstart_cond | op_bstart_std_call:
-            alu = imm
-            is_load = z1
-            is_store = z1
-            size = z3
-            addr = z64
-            wdata = z64
+    # Block markers: forward imm through ALU
+    is_block_marker = op_c_bstart_std | op_c_bstart_cond | op_bstart_std_call
+    alu = mux(is_block_marker, imm, alu)
 
-        # MOVR: pass-through.
-        if op_c_movr:
-            alu = srcl_val
-            is_load = z1
-            is_store = z1
-            size = z3
-            addr = z64
-            wdata = z64
+    # MOVR: pass-through
+    alu = mux(op_c_movr, srcl_val, alu)
 
-        # MOVI: immediate.
-        if op_c_movi:
-            alu = imm
-            is_load = z1
-            is_store = z1
-            size = z3
-            addr = z64
-            wdata = z64
+    # MOVI: immediate
+    alu = mux(op_c_movi, imm, alu)
 
-        # SETRET: ra = PC + off (off already shifted by 1 in decode).
-        if op_c_setret:
-            alu = pc + imm
-            is_load = z1
-            is_store = z1
-            size = z3
-            addr = z64
-            wdata = z64
+    # SETRET: ra = PC + off
+    alu = mux(op_c_setret, pc_val + imm, alu)
 
-        # SETC.EQ / SETC.TGT: internal control state updates (committed in WB).
-        setc_eq = z64
-        if srcl_val == srcr_val:
-            setc_eq = 1
-        if op_c_setc_eq:
-            alu = setc_eq
-            is_load = z1
-            is_store = z1
-            size = z3
-            addr = z64
-            wdata = z64
-        if op_c_setc_tgt:
-            alu = srcl_val
-            is_load = z1
-            is_store = z1
-            size = z3
-            addr = z64
-            wdata = z64
+    # SETC.EQ: (srcl == srcr) ? 1 : 0
+    setc_eq_val = mux(srcl_val.eq(srcr_val), one64, z64)
+    alu = mux(op_c_setc_eq, setc_eq_val, alu)
 
-        # ADDTPC: PC + (imm<<12) (imm already shifted by 12 in decode).
-        pc_page = pc & 0xFFFF_FFFF_FFFF_F000
-        if op_addtpc:
-            alu = pc_page + imm
-            is_load = z1
-            is_store = z1
-            size = z3
-            addr = z64
-            wdata = z64
+    # SETC.TGT: srcl
+    alu = mux(op_c_setc_tgt, srcl_val, alu)
 
-        # ADDI/SUBI/ADDIW: srcl +/- imm.
-        if op_addi:
-            alu = srcl_val + imm
-            is_load = z1
-            is_store = z1
-            size = z3
-            addr = z64
-            wdata = z64
-        subi = srcl_val + ((~imm) + 1)
-        if op_subi:
-            alu = subi
-            is_load = z1
-            is_store = z1
-            size = z3
-            addr = z64
-            wdata = z64
-        addiw = (srcl_val.trunc(width=32) + imm.trunc(width=32)).sext(width=64)
-        if op_addiw:
-            alu = addiw
-            is_load = z1
-            is_store = z1
-            size = z3
-            addr = z64
-            wdata = z64
+    # ADDTPC: PC + (imm<<12)
+    pc_page = pc_val & 0xFFFF_FFFF_FFFF_F000
+    alu = mux(op_addtpc, pc_page + imm, alu)
 
-        # ADDW/ORW/ANDW/XORW: 32-bit ops with sign-extend.
-        addw = (srcl_val.trunc(width=32) + srcr_val.trunc(width=32)).sext(width=64)
-        orw = (srcl_val.trunc(width=32) | srcr_val.trunc(width=32)).sext(width=64)
-        andw = (srcl_val.trunc(width=32) & srcr_val.trunc(width=32)).sext(width=64)
-        xorw = (srcl_val.trunc(width=32) ^ srcr_val.trunc(width=32)).sext(width=64)
-        if op_addw:
-            alu = addw
-            is_load = z1
-            is_store = z1
-            size = z3
-            addr = z64
-            wdata = z64
-        if op_orw:
-            alu = orw
-            is_load = z1
-            is_store = z1
-            size = z3
-            addr = z64
-            wdata = z64
-        if op_andw:
-            alu = andw
-            is_load = z1
-            is_store = z1
-            size = z3
-            addr = z64
-            wdata = z64
-        if op_xorw:
-            alu = xorw
-            is_load = z1
-            is_store = z1
-            size = z3
-            addr = z64
-            wdata = z64
+    # ADDI: srcl + imm
+    alu = mux(op_addi, srcl_val + imm, alu)
 
-        # CMP_EQ: (srcl == srcr) ? 1 : 0
-        cmp = z64
-        if srcl_val == srcr_val:
-            cmp = 1
-        if op_cmp_eq:
-            alu = cmp
-            is_load = z1
-            is_store = z1
-            size = z3
-            addr = z64
-            wdata = z64
+    # SUBI: srcl - imm
+    subi_val = srcl_val + ((~imm) + 1)
+    alu = mux(op_subi, subi_val, alu)
 
-        # HL.LUI: imm.
-        if op_hl_lui:
-            alu = imm
-            is_load = z1
-            is_store = z1
-            size = z3
-            addr = z64
-            wdata = z64
+    # ADDIW: 32-bit add with sign-extend
+    addiw_val = (srcl_val.trunc(width=32) + imm.trunc(width=32)).sext(width=64)
+    alu = mux(op_addiw, addiw_val, alu)
 
-        # CSEL: (srcp != 0) ? srcr : srcl.
-        csel_val = srcl_val
-        if srcp_val != 0:
-            csel_val = srcr_val
-        if op_csel:
-            alu = csel_val
-            is_load = z1
-            is_store = z1
-            size = z3
-            addr = z64
-            wdata = z64
+    # ADDW/ORW/ANDW/XORW: 32-bit ops with sign-extend
+    addw_val = (srcl_val.trunc(width=32) + srcr_val.trunc(width=32)).sext(width=64)
+    orw_val = (srcl_val.trunc(width=32) | srcr_val.trunc(width=32)).sext(width=64)
+    andw_val = (srcl_val.trunc(width=32) & srcr_val.trunc(width=32)).sext(width=64)
+    xorw_val = (srcl_val.trunc(width=32) ^ srcr_val.trunc(width=32)).sext(width=64)
+    alu = mux(op_addw, addw_val, alu)
+    alu = mux(op_orw, orw_val, alu)
+    alu = mux(op_andw, andw_val, alu)
+    alu = mux(op_xorw, xorw_val, alu)
 
-        # LWI / C.LWI: load word, address = srcl + (imm << 2)
-        is_lwi = op_lwi | op_c_lwi
-        lwi_addr = srcl_val + off
-        if is_lwi:
-            alu = z64
-            is_load = 1
-            is_store = z1
-            size = 4
-            addr = lwi_addr
-            wdata = z64
+    # CMP_EQ: (srcl == srcr) ? 1 : 0
+    cmp_val = mux(srcl_val.eq(srcr_val), one64, z64)
+    alu = mux(op_cmp_eq, cmp_val, alu)
 
-        # SWI / C.SWI: store word (4 bytes)
-        store_addr = srcl_val + off
-        store_data = srcr_val
-        if op_swi:
-            store_addr = srcr_val + off
-            store_data = srcl_val
-        if op_swi | op_c_swi:
-            alu = z64
-            is_load = z1
-            is_store = 1
-            size = 4
-            addr = store_addr
-            wdata = store_data
+    # HL.LUI: imm
+    alu = mux(op_hl_lui, imm, alu)
 
-        # SDI: store double word (8 bytes), addr = SrcR + (simm12<<3)
-        sdi_off = imm.shl(amount=3)
-        sdi_addr = srcr_val + sdi_off
-        if op_sdi:
-            alu = z64
-            is_load = z1
-            is_store = 1
-            size = 8
-            addr = sdi_addr
-            wdata = srcl_val
+    # CSEL: (srcp != 0) ? srcr : srcl
+    csel_val = mux(srcp_val.ne(0), srcr_val, srcl_val)
+    alu = mux(op_csel, csel_val, alu)
 
-        # Pipeline regs: EX/MEM.
-        exmem.op.set(op, when=do_ex)
-        exmem.len_bytes.set(len_bytes, when=do_ex)
-        exmem.regdst.set(regdst, when=do_ex)
-        exmem.alu.set(alu, when=do_ex)
-        exmem.is_load.set(is_load, when=do_ex)
-        exmem.is_store.set(is_store, when=do_ex)
-        exmem.size.set(size, when=do_ex)
-        exmem.addr.set(addr, when=do_ex)
-        exmem.wdata.set(wdata, when=do_ex)
+    # LWI / C.LWI: load word
+    is_lwi = op_lwi | op_c_lwi
+    lwi_addr = srcl_val + off
+    is_load = mux(is_lwi, consts.one1, is_load)
+    size = mux(is_lwi, m.ca_const(4, width=3), size)
+    addr = mux(is_lwi, lwi_addr, addr)
+
+    # SWI / C.SWI: store word
+    store_addr_swi = srcr_val + off
+    store_addr_c_swi = srcl_val + off
+    store_addr = mux(op_swi, store_addr_swi, store_addr_c_swi)
+    store_data = mux(op_swi, srcl_val, srcr_val)
+    is_swi = op_swi | op_c_swi
+    is_store = mux(is_swi, consts.one1, is_store)
+    size = mux(is_swi, m.ca_const(4, width=3), size)
+    addr = mux(is_swi, store_addr, addr)
+    wdata = mux(is_swi, store_data, wdata)
+
+    # SDI: store double word
+    sdi_off = imm.shl(amount=3)
+    sdi_addr = srcr_val + sdi_off
+    is_store = mux(op_sdi, consts.one1, is_store)
+    size = mux(op_sdi, m.ca_const(8, width=3), size)
+    addr = mux(op_sdi, sdi_addr, addr)
+    wdata = mux(op_sdi, srcl_val, wdata)
+
+    # Pipeline regs: EX/MEM
+    exmem.op.set(op, when=do_ex)
+    exmem.len_bytes.set(len_bytes, when=do_ex)
+    exmem.regdst.set(regdst, when=do_ex)
+    exmem.alu.set(alu, when=do_ex)
+    exmem.is_load.set(is_load, when=do_ex)
+    exmem.is_store.set(is_store, when=do_ex)
+    exmem.size.set(size, when=do_ex)
+    exmem.addr.set(addr, when=do_ex)
+    exmem.wdata.set(wdata, when=do_ex)

@@ -1,9 +1,19 @@
+# -*- coding: utf-8 -*-
+"""LinxISA CPU implementation using Cycle-Aware API.
+
+A 5-stage pipeline CPU (IF/ID/EX/MEM/WB) demonstrating:
+- CycleAwareReg for pipeline registers and state machines
+- CycleAwareByteMem for unified instruction/data memory
+- Complex control flow with branch handling
+"""
 from __future__ import annotations
 
-from pycircuit import Circuit
-
-# This design is written in "JIT mode": `pycircuit.cli emit` will compile
-# `build(m: Circuit, ...)` via the AST/SCF frontend.
+from pycircuit import (
+    CycleAwareCircuit,
+    CycleAwareDomain,
+    compile_cycle_aware,
+    mux,
+)
 
 from examples.linx_cpu_pyc.isa import BK_FALL, OP_EBREAK, OP_INVALID, REG_INVALID, ST_EX, ST_ID, ST_IF, ST_MEM, ST_WB
 from examples.linx_cpu_pyc.memory import build_byte_mem
@@ -17,87 +27,87 @@ from examples.linx_cpu_pyc.stages.wb_stage import build_wb_stage
 from examples.linx_cpu_pyc.util import make_consts
 
 
-def build(m: Circuit, *, mem_bytes: int = (1 << 20)) -> None:
-    # --- ports ---
-    clk = m.clock("clk")
-    rst = m.reset("rst")
+def _linx_cpu_impl(
+    m: CycleAwareCircuit,
+    domain: CycleAwareDomain,
+    mem_bytes: int,
+) -> None:
+    # --- input signals ---
+    boot_pc = domain.create_signal("boot_pc", width=64)
+    boot_sp = domain.create_signal("boot_sp", width=64)
 
-    boot_pc = m.in_wire("boot_pc", width=64)
-    boot_sp = m.in_wire("boot_sp", width=64)
+    consts = make_consts(m, domain)
 
-    consts = make_consts(m)
+    # --- core state regs ---
+    state = CoreState(
+        stage=m.ca_reg("state_stage", domain=domain, width=3, init=ST_IF),
+        pc=m.ca_reg("state_pc", domain=domain, width=64, init=0),
+        br_kind=m.ca_reg("state_br_kind", domain=domain, width=2, init=BK_FALL),
+        br_base_pc=m.ca_reg("state_br_base_pc", domain=domain, width=64, init=0),
+        br_off=m.ca_reg("state_br_off", domain=domain, width=64, init=0),
+        commit_cond=m.ca_reg("state_commit_cond", domain=domain, width=1, init=0),
+        commit_tgt=m.ca_reg("state_commit_tgt", domain=domain, width=64, init=0),
+        cycles=m.ca_reg("state_cycles", domain=domain, width=64, init=0),
+        halted=m.ca_reg("state_halted", domain=domain, width=1, init=0),
+    )
 
-    # --- core state regs (named) ---
-    with m.scope("state"):
-        state = CoreState(
-            stage=m.out("stage", clk=clk, rst=rst, width=3, init=ST_IF, en=consts.one1),
-            pc=m.out("pc", clk=clk, rst=rst, width=64, init=boot_pc, en=consts.one1),
-            br_kind=m.out("br_kind", clk=clk, rst=rst, width=2, init=BK_FALL, en=consts.one1),
-            br_base_pc=m.out("br_base_pc", clk=clk, rst=rst, width=64, init=boot_pc, en=consts.one1),
-            br_off=m.out("br_off", clk=clk, rst=rst, width=64, init=0, en=consts.one1),
-            commit_cond=m.out("commit_cond", clk=clk, rst=rst, width=1, init=0, en=consts.one1),
-            commit_tgt=m.out("commit_tgt", clk=clk, rst=rst, width=64, init=0, en=consts.one1),
-            cycles=m.out("cycles", clk=clk, rst=rst, width=64, init=0, en=consts.one1),
-            halted=m.out("halted", clk=clk, rst=rst, width=1, init=0, en=consts.one1),
-        )
+    # Initialize PC with boot_pc on first cycle (when cycles == 0)
+    is_first = state.cycles.out().eq(0)
+    state.pc.set(boot_pc, when=is_first)
 
-    with m.scope("ifid"):
-        pipe_ifid = IfIdRegs(window=m.out("window", clk=clk, rst=rst, width=64, init=0, en=consts.one1))
+    pipe_ifid = IfIdRegs(window=m.ca_reg("ifid_window", domain=domain, width=64, init=0))
 
-    with m.scope("idex"):
-        pipe_idex = IdExRegs(
-            op=m.out("op", clk=clk, rst=rst, width=6, init=0, en=consts.one1),
-            len_bytes=m.out("len_bytes", clk=clk, rst=rst, width=3, init=0, en=consts.one1),
-            regdst=m.out("regdst", clk=clk, rst=rst, width=6, init=REG_INVALID, en=consts.one1),
-            srcl=m.out("srcl", clk=clk, rst=rst, width=6, init=REG_INVALID, en=consts.one1),
-            srcr=m.out("srcr", clk=clk, rst=rst, width=6, init=REG_INVALID, en=consts.one1),
-            srcp=m.out("srcp", clk=clk, rst=rst, width=6, init=REG_INVALID, en=consts.one1),
-            imm=m.out("imm", clk=clk, rst=rst, width=64, init=0, en=consts.one1),
-            srcl_val=m.out("srcl_val", clk=clk, rst=rst, width=64, init=0, en=consts.one1),
-            srcr_val=m.out("srcr_val", clk=clk, rst=rst, width=64, init=0, en=consts.one1),
-            srcp_val=m.out("srcp_val", clk=clk, rst=rst, width=64, init=0, en=consts.one1),
-        )
+    pipe_idex = IdExRegs(
+        op=m.ca_reg("idex_op", domain=domain, width=6, init=0),
+        len_bytes=m.ca_reg("idex_len_bytes", domain=domain, width=3, init=0),
+        regdst=m.ca_reg("idex_regdst", domain=domain, width=6, init=REG_INVALID),
+        srcl=m.ca_reg("idex_srcl", domain=domain, width=6, init=REG_INVALID),
+        srcr=m.ca_reg("idex_srcr", domain=domain, width=6, init=REG_INVALID),
+        srcp=m.ca_reg("idex_srcp", domain=domain, width=6, init=REG_INVALID),
+        imm=m.ca_reg("idex_imm", domain=domain, width=64, init=0),
+        srcl_val=m.ca_reg("idex_srcl_val", domain=domain, width=64, init=0),
+        srcr_val=m.ca_reg("idex_srcr_val", domain=domain, width=64, init=0),
+        srcp_val=m.ca_reg("idex_srcp_val", domain=domain, width=64, init=0),
+    )
 
-    with m.scope("exmem"):
-        pipe_exmem = ExMemRegs(
-            op=m.out("op", clk=clk, rst=rst, width=6, init=0, en=consts.one1),
-            len_bytes=m.out("len_bytes", clk=clk, rst=rst, width=3, init=0, en=consts.one1),
-            regdst=m.out("regdst", clk=clk, rst=rst, width=6, init=REG_INVALID, en=consts.one1),
-            alu=m.out("alu", clk=clk, rst=rst, width=64, init=0, en=consts.one1),
-            is_load=m.out("is_load", clk=clk, rst=rst, width=1, init=0, en=consts.one1),
-            is_store=m.out("is_store", clk=clk, rst=rst, width=1, init=0, en=consts.one1),
-            size=m.out("size", clk=clk, rst=rst, width=3, init=0, en=consts.one1),
-            addr=m.out("addr", clk=clk, rst=rst, width=64, init=0, en=consts.one1),
-            wdata=m.out("wdata", clk=clk, rst=rst, width=64, init=0, en=consts.one1),
-        )
+    pipe_exmem = ExMemRegs(
+        op=m.ca_reg("exmem_op", domain=domain, width=6, init=0),
+        len_bytes=m.ca_reg("exmem_len_bytes", domain=domain, width=3, init=0),
+        regdst=m.ca_reg("exmem_regdst", domain=domain, width=6, init=REG_INVALID),
+        alu=m.ca_reg("exmem_alu", domain=domain, width=64, init=0),
+        is_load=m.ca_reg("exmem_is_load", domain=domain, width=1, init=0),
+        is_store=m.ca_reg("exmem_is_store", domain=domain, width=1, init=0),
+        size=m.ca_reg("exmem_size", domain=domain, width=3, init=0),
+        addr=m.ca_reg("exmem_addr", domain=domain, width=64, init=0),
+        wdata=m.ca_reg("exmem_wdata", domain=domain, width=64, init=0),
+    )
 
-    with m.scope("memwb"):
-        pipe_memwb = MemWbRegs(
-            op=m.out("op", clk=clk, rst=rst, width=6, init=0, en=consts.one1),
-            len_bytes=m.out("len_bytes", clk=clk, rst=rst, width=3, init=0, en=consts.one1),
-            regdst=m.out("regdst", clk=clk, rst=rst, width=6, init=REG_INVALID, en=consts.one1),
-            value=m.out("value", clk=clk, rst=rst, width=64, init=0, en=consts.one1),
-        )
+    pipe_memwb = MemWbRegs(
+        op=m.ca_reg("memwb_op", domain=domain, width=6, init=0),
+        len_bytes=m.ca_reg("memwb_len_bytes", domain=domain, width=3, init=0),
+        regdst=m.ca_reg("memwb_regdst", domain=domain, width=6, init=REG_INVALID),
+        value=m.ca_reg("memwb_value", domain=domain, width=64, init=0),
+    )
 
     # --- register files ---
-    with m.scope("gpr"):
-        gpr = make_gpr(m, clk, rst, boot_sp=boot_sp, en=consts.one1)
-    with m.scope("t"):
-        t = make_regs(m, clk, rst, count=4, width=64, init=consts.zero64, en=consts.one1)
-    with m.scope("u"):
-        u = make_regs(m, clk, rst, count=4, width=64, init=consts.zero64, en=consts.one1)
+    gpr = make_gpr(m, domain, boot_sp=boot_sp)
+    # Initialize r1 (sp) with boot_sp on first cycle
+    gpr[1].set(boot_sp, when=is_first)
+    
+    t = make_regs(m, domain, count=4, width=64, init=0)
+    u = make_regs(m, domain, count=4, width=64, init=0)
 
     rf = RegFiles(gpr=gpr, t=t, u=u)
 
     # --- stage control ---
-    stage_is_if = state.stage == ST_IF
-    stage_is_id = state.stage == ST_ID
-    stage_is_ex = state.stage == ST_EX
-    stage_is_mem = state.stage == ST_MEM
-    stage_is_wb = state.stage == ST_WB
+    stage_is_if = state.stage.out().eq(ST_IF)
+    stage_is_id = state.stage.out().eq(ST_ID)
+    stage_is_ex = state.stage.out().eq(ST_EX)
+    stage_is_mem = state.stage.out().eq(ST_MEM)
+    stage_is_wb = state.stage.out().eq(ST_WB)
 
-    halt_set = stage_is_wb & (~state.halted) & ((pipe_memwb.op == OP_EBREAK) | (pipe_memwb.op == OP_INVALID))
-    stop = state.halted | halt_set
+    halt_set = stage_is_wb & (~state.halted.out()) & (pipe_memwb.op.out().eq(OP_EBREAK) | pipe_memwb.op.out().eq(OP_INVALID))
+    stop = state.halted.out() | halt_set
     active = ~stop
 
     do_if = stage_is_if & active
@@ -107,24 +117,25 @@ def build(m: Circuit, *, mem_bytes: int = (1 << 20)) -> None:
     do_wb = stage_is_wb & active
 
     # --- unified byte memory (instruction + data) ---
-    mem_raddr = 0
-    if stage_is_mem & active & pipe_exmem.is_load:
-        mem_raddr = pipe_exmem.addr
-    if do_if:
-        mem_raddr = state.pc
-    mem_wvalid = stage_is_mem & active & pipe_exmem.is_store
-    mem_waddr = pipe_exmem.addr
-    mem_wdata = pipe_exmem.wdata
-    mem_wstrb = 0
-    if pipe_exmem.size == 8:
-        mem_wstrb = 0xFF
-    if pipe_exmem.size == 4:
-        mem_wstrb = 0x0F
+    zero64 = consts.zero64
+    zero8 = consts.zero8
+    zero1 = consts.zero1
+
+    # Memory read address: IF stage reads PC, MEM stage reads load address
+    mem_raddr = mux(do_if, state.pc.out(), zero64)
+    mem_raddr = mux(stage_is_mem & active & pipe_exmem.is_load.out(), pipe_exmem.addr.out(), mem_raddr)
+
+    mem_wvalid = stage_is_mem & active & pipe_exmem.is_store.out()
+    mem_waddr = pipe_exmem.addr.out()
+    mem_wdata = pipe_exmem.wdata.out()
+    
+    # Write strobe based on size
+    mem_wstrb = mux(pipe_exmem.size.out().eq(8), m.ca_const(0xFF, width=8), zero8)
+    mem_wstrb = mux(pipe_exmem.size.out().eq(4), m.ca_const(0x0F, width=8), mem_wstrb)
 
     mem_rdata = build_byte_mem(
         m,
-        clk,
-        rst,
+        domain,
         raddr=mem_raddr,
         wvalid=mem_wvalid,
         waddr=mem_waddr,
@@ -137,7 +148,7 @@ def build(m: Circuit, *, mem_bytes: int = (1 << 20)) -> None:
     # --- stages ---
     build_if_stage(m, do_if=do_if, ifid_window=pipe_ifid.window, mem_rdata=mem_rdata)
     build_id_stage(m, do_id=do_id, ifid=pipe_ifid, idex=pipe_idex, rf=rf, consts=consts)
-    build_ex_stage(m, do_ex=do_ex, pc=state.pc, idex=pipe_idex, exmem=pipe_exmem, consts=consts)
+    build_ex_stage(m, do_ex=do_ex, pc=state.pc.out(), idex=pipe_idex, exmem=pipe_exmem, consts=consts)
     build_mem_stage(m, do_mem=do_mem, exmem=pipe_exmem, memwb=pipe_memwb, mem_rdata=mem_rdata)
     build_wb_stage(
         m,
@@ -155,23 +166,29 @@ def build(m: Circuit, *, mem_bytes: int = (1 << 20)) -> None:
     )
 
     # --- outputs ---
-    m.output("halted", state.halted)
-    m.output("pc", state.pc)
-    m.output("stage", state.stage)
-    m.output("cycles", state.cycles)
-    m.output("a0", rf.gpr[2])
-    m.output("a1", rf.gpr[3])
-    m.output("ra", rf.gpr[10])
-    m.output("sp", rf.gpr[1])
-    m.output("br_kind", state.br_kind)
-    # Debug/trace hooks (stable, optional consumers).
-    m.output("if_window", pipe_ifid.window)
-    m.output("wb_op", pipe_memwb.op)
-    m.output("wb_regdst", pipe_memwb.regdst)
-    m.output("wb_value", pipe_memwb.value)
-    m.output("commit_cond", state.commit_cond)
-    m.output("commit_tgt", state.commit_tgt)
+    m.output("halted", state.halted.out().sig)
+    m.output("pc", state.pc.out().sig)
+    m.output("stage", state.stage.out().sig)
+    m.output("cycles", state.cycles.out().sig)
+    m.output("a0", rf.gpr[2].out().sig)
+    m.output("a1", rf.gpr[3].out().sig)
+    m.output("ra", rf.gpr[10].out().sig)
+    m.output("sp", rf.gpr[1].out().sig)
+    m.output("br_kind", state.br_kind.out().sig)
+    # Debug/trace hooks
+    m.output("if_window", pipe_ifid.window.out().sig)
+    m.output("wb_op", pipe_memwb.op.out().sig)
+    m.output("wb_regdst", pipe_memwb.regdst.out().sig)
+    m.output("wb_value", pipe_memwb.value.out().sig)
+    m.output("commit_cond", state.commit_cond.out().sig)
+    m.output("commit_tgt", state.commit_tgt.out().sig)
 
 
-# Preserve the historical top/module name expected by existing testbenches.
-build.__pycircuit_name__ = "linx_cpu_pyc"
+def linx_cpu_pyc(m: CycleAwareCircuit, domain: CycleAwareDomain) -> None:
+    """LinxISA CPU with default memory size."""
+    _linx_cpu_impl(m, domain, mem_bytes=(1 << 20))
+
+
+if __name__ == "__main__":
+    circuit = compile_cycle_aware(linx_cpu_pyc, name="linx_cpu_pyc")
+    print(circuit.emit_mlir())

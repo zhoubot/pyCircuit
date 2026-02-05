@@ -1083,3 +1083,1295 @@ def cat(*elems: Union[Wire, Reg]) -> Wire:
       `bus = m.cat(a, b, c)` (when all values belong to the same Circuit).
     """
     return Vec(tuple(elems)).pack()
+
+
+# =============================================================================
+# Cycle-Aware Signal System (New Architecture)
+# =============================================================================
+
+
+class CycleAwareDomain:
+    """时钟域管理器，实现周期状态追踪。
+    
+    核心功能：
+    - 追踪当前时钟周期
+    - 提供 next()/prev()/push()/pop() 周期管理API
+    - 创建带周期信息的信号
+    """
+
+    def __init__(self, name: str, m: "CycleAwareCircuit") -> None:
+        self.name = name
+        self.m = m
+        self.clk: Signal | None = None
+        self.rst: Signal | None = None
+        self._current_cycle: int = 0
+        self._cycle_stack: list[int] = []
+
+    def _ensure_clk_rst(self) -> None:
+        """确保clk和rst已初始化。"""
+        if self.clk is None:
+            self.clk = self.m.clock(f"{self.name}_clk")
+        if self.rst is None:
+            self.rst = self.m.reset(f"{self.name}_rst")
+
+    @property
+    def current_cycle(self) -> int:
+        """获取当前周期。"""
+        return self._current_cycle
+
+    def next(self) -> None:
+        """推进到下一个时钟周期。"""
+        self._current_cycle += 1
+
+    def prev(self) -> None:
+        """回退到上一个时钟周期。"""
+        self._current_cycle -= 1
+
+    def push(self) -> None:
+        """保存当前周期状态到栈。"""
+        self._cycle_stack.append(self._current_cycle)
+
+    def pop(self) -> None:
+        """从栈恢复周期状态。"""
+        if not self._cycle_stack:
+            raise RuntimeError("pop() without matching push()")
+        self._current_cycle = self._cycle_stack.pop()
+
+    def create_signal(self, name: str, *, width: int, init_value: int = 0) -> "CycleAwareSignal":
+        """创建输入信号，周期为当前周期。"""
+        self._ensure_clk_rst()
+        sig = self.m.input(name, width=width)
+        return CycleAwareSignal(
+            m=self.m,
+            sig=sig,
+            cycle=self._current_cycle,
+            domain=self,
+            name=name,
+            signed=False,
+        )
+
+    def create_const(self, value: int, *, width: int, name: str = "") -> "CycleAwareSignal":
+        """创建常量信号，周期为当前周期。"""
+        self._ensure_clk_rst()
+        sig = self.m.const(value, width=width)
+        return CycleAwareSignal(
+            m=self.m,
+            sig=sig,
+            cycle=self._current_cycle,
+            domain=self,
+            name=name or f"const_{value}",
+            signed=(value < 0),
+        )
+
+    def cycle(
+        self,
+        sig: "CycleAwareSignal",
+        *,
+        reset_value: int = 0,
+        name: str = "",
+    ) -> "CycleAwareSignal":
+        """创建D触发器（单周期延迟）。
+        
+        输出周期 = 输入周期 + 1
+        """
+        self._ensure_clk_rst()
+        assert self.clk is not None and self.rst is not None
+        
+        en = self.m.const(1, width=1)
+        init = self.m.const(reset_value, width=_int_width(sig.sig.ty))
+        q_sig = self.m.reg(self.clk, self.rst, en, sig.sig, init)
+        
+        out_name = name or f"{sig.name}__dff"
+        return CycleAwareSignal(
+            m=self.m,
+            sig=q_sig,
+            cycle=sig.cycle + 1,
+            domain=self,
+            name=out_name,
+            signed=sig.signed,
+        )
+
+    def create_reset(self) -> Signal:
+        """创建复位信号。"""
+        self._ensure_clk_rst()
+        assert self.rst is not None
+        return self.rst
+
+
+@dataclass
+class CycleAwareSignal:
+    """周期感知信号。
+    
+    每个信号携带：
+    - sig: 底层MLIR信号
+    - cycle: 当前周期
+    - domain: 所属时钟域
+    - name: 调试名称
+    - signed: 符号性
+    """
+    m: "CycleAwareCircuit"
+    sig: Signal
+    cycle: int
+    domain: CycleAwareDomain
+    name: str = ""
+    signed: bool = False
+
+    @property
+    def ref(self) -> str:
+        return self.sig.ref
+
+    @property
+    def ty(self) -> str:
+        return self.sig.ty
+
+    @property
+    def width(self) -> int:
+        return _int_width(self.sig.ty)
+
+    def __str__(self) -> str:
+        return f"{self.name}@cycle{self.cycle}" if self.name else f"{self.sig.ref}@cycle{self.cycle}"
+
+    def __repr__(self) -> str:
+        return f"CycleAwareSignal({self.name!r}, cycle={self.cycle}, width={self.width})"
+
+    def __bool__(self) -> bool:
+        raise TypeError(
+            "CycleAwareSignal cannot be used as a Python boolean. "
+            "Use `if` inside a JIT-compiled design function, or compare explicitly."
+        )
+
+    def _as_signal(self, v: Union["CycleAwareSignal", int], *, width: int | None = None) -> "CycleAwareSignal":
+        """将值转换为CycleAwareSignal。"""
+        if isinstance(v, CycleAwareSignal):
+            if v.m is not self.m:
+                raise ValueError("cannot combine signals from different modules")
+            return v
+        if isinstance(v, int):
+            w = width if width is not None else self.width
+            return self.domain.create_const(int(v), width=w)
+        raise TypeError(f"unsupported operand type: {type(v).__name__}")
+
+    def _balanced_binop(
+        self,
+        other: Union["CycleAwareSignal", int],
+        op_fn: Any,
+        op_name: str,
+    ) -> "CycleAwareSignal":
+        """执行二元运算，自动周期平衡。"""
+        other_sig = self._as_signal(other)
+        
+        # 周期平衡
+        a, b = self.m._balance_cycles(self, other_sig)
+        
+        # 位宽对齐
+        out_w = max(a.width, b.width)
+        a_sig = a.sig
+        b_sig = b.sig
+        if a.width < out_w:
+            a_sig = self.m.zext(a.sig, width=out_w) if not a.signed else self.m.sext(a.sig, width=out_w)
+        if b.width < out_w:
+            b_sig = self.m.zext(b.sig, width=out_w) if not b.signed else self.m.sext(b.sig, width=out_w)
+        
+        result_sig = op_fn(a_sig, b_sig)
+        out_cycle = max(a.cycle, b.cycle)
+        
+        return CycleAwareSignal(
+            m=self.m,
+            sig=result_sig,
+            cycle=out_cycle,
+            domain=self.domain,
+            name=f"({self.name} {op_name} {other_sig.name})" if self.name and other_sig.name else "",
+            signed=(a.signed or b.signed),
+        )
+
+    def __add__(self, other: Union["CycleAwareSignal", int]) -> "CycleAwareSignal":
+        return self._balanced_binop(other, self.m.add, "+")
+
+    def __radd__(self, other: Union["CycleAwareSignal", int]) -> "CycleAwareSignal":
+        return self.__add__(other)
+
+    def __sub__(self, other: Union["CycleAwareSignal", int]) -> "CycleAwareSignal":
+        return self._balanced_binop(other, self.m.sub, "-")
+
+    def __rsub__(self, other: Union["CycleAwareSignal", int]) -> "CycleAwareSignal":
+        other_sig = self._as_signal(other)
+        return other_sig.__sub__(self)
+
+    def __mul__(self, other: Union["CycleAwareSignal", int]) -> "CycleAwareSignal":
+        return self._balanced_binop(other, self.m.mul, "*")
+
+    def __rmul__(self, other: Union["CycleAwareSignal", int]) -> "CycleAwareSignal":
+        return self.__mul__(other)
+
+    def __and__(self, other: Union["CycleAwareSignal", int]) -> "CycleAwareSignal":
+        return self._balanced_binop(other, self.m.and_, "&")
+
+    def __rand__(self, other: Union["CycleAwareSignal", int]) -> "CycleAwareSignal":
+        return self.__and__(other)
+
+    def __or__(self, other: Union["CycleAwareSignal", int]) -> "CycleAwareSignal":
+        return self._balanced_binop(other, self.m.or_, "|")
+
+    def __ror__(self, other: Union["CycleAwareSignal", int]) -> "CycleAwareSignal":
+        return self.__or__(other)
+
+    def __xor__(self, other: Union["CycleAwareSignal", int]) -> "CycleAwareSignal":
+        return self._balanced_binop(other, self.m.xor, "^")
+
+    def __rxor__(self, other: Union["CycleAwareSignal", int]) -> "CycleAwareSignal":
+        return self.__xor__(other)
+
+    def __invert__(self) -> "CycleAwareSignal":
+        result_sig = self.m.not_(self.sig)
+        return CycleAwareSignal(
+            m=self.m,
+            sig=result_sig,
+            cycle=self.cycle,
+            domain=self.domain,
+            name=f"~{self.name}" if self.name else "",
+            signed=self.signed,
+        )
+
+    def __lshift__(self, amount: int) -> "CycleAwareSignal":
+        if not isinstance(amount, int):
+            raise TypeError("<< only supports constant integer shift amounts")
+        result_sig = self.m.shli(self.sig, amount=int(amount))
+        return CycleAwareSignal(
+            m=self.m,
+            sig=result_sig,
+            cycle=self.cycle,
+            domain=self.domain,
+            name=f"({self.name} << {amount})" if self.name else "",
+            signed=self.signed,
+        )
+
+    def __rshift__(self, amount: int) -> "CycleAwareSignal":
+        if not isinstance(amount, int):
+            raise TypeError(">> only supports constant integer shift amounts")
+        if self.signed:
+            result_sig = self.m.ashri(self.sig, amount=int(amount))
+        else:
+            result_sig = self.m.lshri(self.sig, amount=int(amount))
+        return CycleAwareSignal(
+            m=self.m,
+            sig=result_sig,
+            cycle=self.cycle,
+            domain=self.domain,
+            name=f"({self.name} >> {amount})" if self.name else "",
+            signed=self.signed,
+        )
+
+    def eq(self, other: Union["CycleAwareSignal", int]) -> "CycleAwareSignal":
+        """相等比较（返回i1信号）。"""
+        other_sig = self._as_signal(other)
+        a, b = self.m._balance_cycles(self, other_sig)
+        # 位宽对齐
+        out_w = max(a.width, b.width)
+        a_sig = a.sig if a.width == out_w else self.m.zext(a.sig, width=out_w)
+        b_sig = b.sig if b.width == out_w else self.m.zext(b.sig, width=out_w)
+        result_sig = self.m.eq(a_sig, b_sig)
+        return CycleAwareSignal(
+            m=self.m,
+            sig=result_sig,
+            cycle=max(a.cycle, b.cycle),
+            domain=self.domain,
+            name=f"({self.name} == {other_sig.name})" if self.name else "",
+            signed=False,
+        )
+
+    def ne(self, other: Union["CycleAwareSignal", int]) -> "CycleAwareSignal":
+        """不等比较（返回i1信号）。"""
+        eq_result = self.eq(other)
+        return ~eq_result
+
+    def lt(self, other: Union["CycleAwareSignal", int]) -> "CycleAwareSignal":
+        """小于比较（返回i1信号）。"""
+        other_sig = self._as_signal(other)
+        a, b = self.m._balance_cycles(self, other_sig)
+        out_w = max(a.width, b.width)
+        a_sig = a.sig if a.width == out_w else self.m.zext(a.sig, width=out_w)
+        b_sig = b.sig if b.width == out_w else self.m.zext(b.sig, width=out_w)
+        if a.signed or b.signed:
+            result_sig = self.m.slt(a_sig, b_sig)
+        else:
+            result_sig = self.m.ult(a_sig, b_sig)
+        return CycleAwareSignal(
+            m=self.m,
+            sig=result_sig,
+            cycle=max(a.cycle, b.cycle),
+            domain=self.domain,
+            name=f"({self.name} < {other_sig.name})" if self.name else "",
+            signed=False,
+        )
+
+    def gt(self, other: Union["CycleAwareSignal", int]) -> "CycleAwareSignal":
+        """大于比较。"""
+        other_sig = self._as_signal(other)
+        return other_sig.lt(self)
+
+    def le(self, other: Union["CycleAwareSignal", int]) -> "CycleAwareSignal":
+        """小于等于比较。"""
+        return ~self.gt(other)
+
+    def ge(self, other: Union["CycleAwareSignal", int]) -> "CycleAwareSignal":
+        """大于等于比较。"""
+        return ~self.lt(other)
+
+    def select(
+        self,
+        true_val: Union["CycleAwareSignal", int],
+        false_val: Union["CycleAwareSignal", int],
+    ) -> "CycleAwareSignal":
+        """条件选择（self为条件，必须是i1）。"""
+        if self.ty != "i1":
+            raise TypeError("select() requires a 1-bit selector signal (i1)")
+        
+        true_sig = self._as_signal(true_val)
+        false_sig = self._as_signal(false_val)
+        
+        # 周期平衡所有三个信号
+        cond, t, f = self.m._balance_cycles(self, true_sig, false_sig)
+        
+        # 位宽对齐
+        out_w = max(t.width, f.width)
+        t_sig = t.sig if t.width == out_w else self.m.zext(t.sig, width=out_w)
+        f_sig = f.sig if f.width == out_w else self.m.zext(f.sig, width=out_w)
+        
+        result_sig = self.m.mux(cond.sig, t_sig, f_sig)
+        return CycleAwareSignal(
+            m=self.m,
+            sig=result_sig,
+            cycle=max(cond.cycle, t.cycle, f.cycle),
+            domain=self.domain,
+            name="",
+            signed=(t.signed or f.signed),
+        )
+
+    def trunc(self, *, width: int) -> "CycleAwareSignal":
+        """截断到指定位宽。"""
+        result_sig = self.m.trunc(self.sig, width=width)
+        return CycleAwareSignal(
+            m=self.m,
+            sig=result_sig,
+            cycle=self.cycle,
+            domain=self.domain,
+            name=f"{self.name}[{width-1}:0]" if self.name else "",
+            signed=self.signed,
+        )
+
+    def zext(self, *, width: int) -> "CycleAwareSignal":
+        """零扩展到指定位宽。"""
+        result_sig = self.m.zext(self.sig, width=width)
+        return CycleAwareSignal(
+            m=self.m,
+            sig=result_sig,
+            cycle=self.cycle,
+            domain=self.domain,
+            name=self.name,
+            signed=False,
+        )
+
+    def sext(self, *, width: int) -> "CycleAwareSignal":
+        """符号扩展到指定位宽。"""
+        result_sig = self.m.sext(self.sig, width=width)
+        return CycleAwareSignal(
+            m=self.m,
+            sig=result_sig,
+            cycle=self.cycle,
+            domain=self.domain,
+            name=self.name,
+            signed=True,
+        )
+
+    def shl(self, *, amount: int) -> "CycleAwareSignal":
+        """左移指定位数。"""
+        result_sig = self.m.shli(self.sig, amount=amount)
+        return CycleAwareSignal(
+            m=self.m,
+            sig=result_sig,
+            cycle=self.cycle,
+            domain=self.domain,
+            name=self.name,
+            signed=self.signed,
+        )
+
+    def slice(self, *, lsb: int, width: int) -> "CycleAwareSignal":
+        """提取位片段。"""
+        result_sig = self.m.extract(self.sig, lsb=lsb, width=width)
+        return CycleAwareSignal(
+            m=self.m,
+            sig=result_sig,
+            cycle=self.cycle,
+            domain=self.domain,
+            name=f"{self.name}[{lsb+width-1}:{lsb}]" if self.name else "",
+            signed=False,
+        )
+
+    def __getitem__(self, idx: int | slice) -> "CycleAwareSignal":
+        if isinstance(idx, slice):
+            if idx.step is not None:
+                raise TypeError("signal slicing does not support step")
+            lsb = 0 if idx.start is None else int(idx.start)
+            stop = self.width if idx.stop is None else int(idx.stop)
+            if lsb < 0 or stop < 0:
+                raise ValueError("signal slice indices must be >= 0")
+            if stop < lsb:
+                raise ValueError("signal slice stop must be >= start")
+            width = stop - lsb
+            if width <= 0:
+                raise ValueError("signal slice width must be > 0")
+            return self.slice(lsb=lsb, width=width)
+        
+        bit = int(idx)
+        if bit < 0:
+            raise ValueError("signal bit index must be >= 0")
+        if bit >= self.width:
+            raise ValueError("signal bit index out of range")
+        return self.slice(lsb=bit, width=1)
+
+    def named(self, name: str) -> "CycleAwareSignal":
+        """附加调试名称。"""
+        scoped = self.m.scoped_name(name) if hasattr(self.m, "scoped_name") else name
+        aliased = self.m.alias(self.sig, name=scoped)
+        return CycleAwareSignal(
+            m=self.m,
+            sig=aliased,
+            cycle=self.cycle,
+            domain=self.domain,
+            name=name,
+            signed=self.signed,
+        )
+
+    def as_signed(self) -> "CycleAwareSignal":
+        """标记为有符号。"""
+        return CycleAwareSignal(
+            m=self.m,
+            sig=self.sig,
+            cycle=self.cycle,
+            domain=self.domain,
+            name=self.name,
+            signed=True,
+        )
+
+    def as_unsigned(self) -> "CycleAwareSignal":
+        """标记为无符号。"""
+        return CycleAwareSignal(
+            m=self.m,
+            sig=self.sig,
+            cycle=self.cycle,
+            domain=self.domain,
+            name=self.name,
+            signed=False,
+        )
+
+
+class CycleAwareCircuit(Circuit):
+    """支持周期感知的电路模块。
+    
+    核心功能：
+    - 管理多个时钟域
+    - 自动周期平衡
+    - 自动DFF插入
+    """
+
+    def __init__(self, name: str) -> None:
+        super().__init__(name)
+        self._domains: dict[str, CycleAwareDomain] = {}
+        self._default_domain: CycleAwareDomain | None = None
+        self._dff_counter: int = 0
+
+    def create_domain(self, name: str) -> CycleAwareDomain:
+        """创建或获取时钟域。"""
+        if name not in self._domains:
+            dom = CycleAwareDomain(name, self)
+            self._domains[name] = dom
+            if self._default_domain is None:
+                self._default_domain = dom
+        return self._domains[name]
+
+    def get_default_domain(self) -> CycleAwareDomain:
+        """获取默认时钟域。"""
+        if self._default_domain is None:
+            self._default_domain = self.create_domain("default")
+        return self._default_domain
+
+    def _balance_cycles(self, *signals: CycleAwareSignal) -> tuple[CycleAwareSignal, ...]:
+        """自动周期平衡：将所有信号对齐到最大周期。
+        
+        如果信号的周期小于最大周期，则自动插入DFF链延迟。
+        """
+        if not signals:
+            return ()
+        
+        max_cycle = max(s.cycle for s in signals)
+        result: list[CycleAwareSignal] = []
+        
+        for s in signals:
+            if s.cycle < max_cycle:
+                delay = max_cycle - s.cycle
+                delayed = self._insert_dff_chain(s, delay)
+                result.append(delayed)
+            else:
+                result.append(s)
+        
+        return tuple(result)
+
+    def _insert_dff_chain(self, sig: CycleAwareSignal, delay: int) -> CycleAwareSignal:
+        """插入N级DFF实现延迟。"""
+        if delay <= 0:
+            return sig
+        
+        sig.domain._ensure_clk_rst()
+        assert sig.domain.clk is not None and sig.domain.rst is not None
+        
+        current = sig
+        for i in range(delay):
+            self._dff_counter += 1
+            en = self.const(1, width=1)
+            init = self.const(0, width=current.width)
+            q_sig = self.reg(sig.domain.clk, sig.domain.rst, en, current.sig, init)
+            
+            current = CycleAwareSignal(
+                m=self,
+                sig=q_sig,
+                cycle=current.cycle + 1,
+                domain=sig.domain,
+                name=f"{sig.name}__dff{self._dff_counter}" if sig.name else f"__dff{self._dff_counter}",
+                signed=sig.signed,
+            )
+        
+        return current
+
+    def const_signal(self, value: int, *, width: int, domain: CycleAwareDomain | None = None) -> CycleAwareSignal:
+        """创建常量信号。"""
+        dom = domain or self.get_default_domain()
+        return dom.create_const(value, width=width)
+
+    def input_signal(self, name: str, *, width: int, domain: CycleAwareDomain | None = None) -> CycleAwareSignal:
+        """创建输入信号。"""
+        dom = domain or self.get_default_domain()
+        return dom.create_signal(name, width=width)
+
+    def cat_signals(self, *signals: CycleAwareSignal) -> CycleAwareSignal:
+        """拼接多个CycleAwareSignal为一个信号 (MSB-first)。
+        
+        自动进行周期平衡，输出周期为所有输入的最大周期。
+        """
+        if not signals:
+            raise ValueError("cat_signals requires at least one signal")
+        
+        if len(signals) == 1:
+            return signals[0]
+        
+        # 周期平衡
+        balanced = self._balance_cycles(*signals)
+        max_cycle = balanced[0].cycle
+        domain = balanced[0].domain
+        
+        # 使用底层concat拼接
+        underlying_sigs = [s.sig for s in balanced]
+        result_sig = self.concat(*underlying_sigs)
+        
+        total_width = sum(s.width for s in balanced)
+        return CycleAwareSignal(
+            m=self,
+            sig=result_sig,
+            cycle=max_cycle,
+            domain=domain,
+            name="",
+            signed=False,
+        )
+
+    def ca_queue(
+        self,
+        name: str,
+        *,
+        domain: CycleAwareDomain | None = None,
+        width: int,
+        depth: int,
+    ) -> "CycleAwareQueue":
+        """创建周期感知队列。
+        
+        Args:
+            name: 队列名称
+            domain: 时钟域（默认使用默认时钟域）
+            width: 数据位宽
+            depth: 队列深度
+        """
+        dom = domain or self.get_default_domain()
+        return CycleAwareQueue(self, name, domain=dom, width=width, depth=depth)
+
+    def ca_byte_mem(
+        self,
+        name: str,
+        *,
+        domain: CycleAwareDomain | None = None,
+        depth: int,
+        data_width: int = 64,
+    ) -> "CycleAwareByteMem":
+        """创建周期感知字节内存。
+        
+        Args:
+            name: 内存名称
+            domain: 时钟域（默认使用默认时钟域）
+            depth: 内存深度（字节数）
+            data_width: 数据位宽（默认64位）
+        """
+        dom = domain or self.get_default_domain()
+        return CycleAwareByteMem(self, name, domain=dom, depth=depth, data_width=data_width)
+
+    def ca_bundle(self, **fields: CycleAwareSignal) -> "CycleAwareBundle":
+        """创建周期感知结构体。
+        
+        Args:
+            **fields: 命名字段
+        """
+        return CycleAwareBundle(fields)
+
+    def ca_const(self, value: int, *, width: int, domain: CycleAwareDomain | None = None) -> CycleAwareSignal:
+        """创建常量信号的便捷方法。"""
+        dom = domain or self.get_default_domain()
+        return dom.create_const(value, width=width)
+
+    def ca_reg(
+        self,
+        name: str,
+        *,
+        domain: CycleAwareDomain,
+        width: int,
+        init: int = 0,
+    ) -> "CycleAwareReg":
+        """创建周期感知寄存器。
+        
+        Args:
+            name: 寄存器名称
+            domain: 时钟域
+            width: 位宽
+            init: 复位值
+        """
+        return CycleAwareReg(self, name, domain=domain, width=width, init=init)
+
+
+def ca_cat(*signals: CycleAwareSignal) -> CycleAwareSignal:
+    """拼接CycleAwareSignal的便捷函数 (MSB-first)。
+    
+    用法: bus = ca_cat(a, b, c)  # 等同于 {a, b, c} in Verilog
+    """
+    if not signals:
+        raise ValueError("ca_cat requires at least one signal")
+    m = signals[0].m
+    return m.cat_signals(*signals)
+
+
+# =============================================================================
+# Syntax Sugar: signal factory and mux function
+# =============================================================================
+
+
+class _PendingSignal:
+    """待完成的信号，等待 | "description"。"""
+
+    def __init__(
+        self,
+        domain: CycleAwareDomain,
+        width: int,
+        value: int | str,
+        signed: bool = False,
+    ) -> None:
+        self.domain = domain
+        self.width = width
+        self.value = value
+        self.signed = signed
+
+    def __or__(self, description: str) -> CycleAwareSignal:
+        """signal[7:0](value=0) | "description" 语法。"""
+        if isinstance(self.value, int):
+            # 常量信号
+            sig = self.domain.create_const(self.value, width=self.width, name=description)
+        else:
+            # 输入信号（value是名称）
+            sig = self.domain.create_signal(str(self.value), width=self.width)
+        
+        return CycleAwareSignal(
+            m=sig.m,
+            sig=sig.sig,
+            cycle=sig.cycle,
+            domain=sig.domain,
+            name=description,
+            signed=self.signed,
+        )
+
+
+class _SignalFactoryInstance:
+    """信号工厂实例，支持 signal[7:0](value=0) 语法。"""
+
+    def __init__(self, domain: CycleAwareDomain) -> None:
+        self.domain = domain
+        self._high: int | None = None
+        self._low: int | None = None
+        self._width_expr: str | None = None
+
+    def __getitem__(self, key: slice | str) -> "_SignalFactoryInstance":
+        """signal[7:0] 或 signal["width-1:0"] 语法。"""
+        factory = _SignalFactoryInstance(self.domain)
+        if isinstance(key, slice):
+            factory._high = key.start
+            factory._low = key.stop
+        elif isinstance(key, str):
+            factory._width_expr = key
+        return factory
+
+    def _compute_width(self) -> int:
+        """计算位宽。"""
+        if self._width_expr is not None:
+            # 简单解析 "N-1:0" 格式
+            parts = self._width_expr.split(":")
+            if len(parts) == 2:
+                high_expr = parts[0].strip()
+                low_expr = parts[1].strip()
+                # 尝试解析简单表达式如 "7" 或 "width-1"
+                try:
+                    low = int(low_expr)
+                    if "-" in high_expr:
+                        base, offset = high_expr.rsplit("-", 1)
+                        return int(base.strip()) - int(offset.strip()) - low + 1
+                    else:
+                        return int(high_expr) - low + 1
+                except ValueError:
+                    raise ValueError(f"Cannot parse width expression: {self._width_expr}")
+            raise ValueError(f"Invalid width expression: {self._width_expr}")
+        
+        if self._high is not None and self._low is not None:
+            return self._high - self._low + 1
+        
+        raise ValueError("Signal width not specified")
+
+    def __call__(self, value: int | str = 0) -> _PendingSignal:
+        """signal[7:0](value=0) 语法。"""
+        width = self._compute_width()
+        return _PendingSignal(self.domain, width, value)
+
+
+class SignalFactory:
+    """全局信号工厂，需要绑定到时钟域使用。
+    
+    用法:
+        signal = SignalFactory(domain)
+        counter = signal[7:0](value=0) | "Counter"
+    """
+
+    def __init__(self, domain: CycleAwareDomain) -> None:
+        self.domain = domain
+
+    def __getitem__(self, key: slice | str) -> _SignalFactoryInstance:
+        """signal[7:0] 语法。"""
+        factory = _SignalFactoryInstance(self.domain)
+        return factory[key]
+
+    def __call__(self, value: int | str = 0) -> _PendingSignal:
+        """signal(value=...) 单位信号。"""
+        return _PendingSignal(self.domain, 1, value)
+
+
+def mux(
+    cond: CycleAwareSignal,
+    true_val: CycleAwareSignal | int,
+    false_val: CycleAwareSignal | int,
+) -> CycleAwareSignal:
+    """多路选择器，自动周期平衡。
+    
+    cond为True时选择true_val，否则选择false_val。
+    """
+    if cond.ty != "i1":
+        raise TypeError("mux condition must be i1")
+    return cond.select(true_val, false_val)
+
+
+# =============================================================================
+# Module Context Manager
+# =============================================================================
+
+
+class _ModuleContext:
+    """模块上下文，用于记录输入输出。"""
+
+    def __init__(self, inputs: list[CycleAwareSignal], description: str = "") -> None:
+        self.inputs = inputs
+        self.description = description
+        self.outputs: list[CycleAwareSignal] = []
+
+
+class CycleAwareModule:
+    """电路模块基类，支持 with self.module(...) as mod 语法。
+    
+    使用方式:
+        class MyModule(CycleAwareModule):
+            def build(self, input_data):
+                with self.module(inputs=[input_data], description="My module") as mod:
+                    # 模块逻辑
+                    result = ...
+                    mod.outputs = [result]
+                return result
+    """
+
+    def __init__(self, name: str, clock_domain: CycleAwareDomain) -> None:
+        self.name = name
+        self.clock_domain = clock_domain
+        self._signal_factory: SignalFactory | None = None
+
+    @property
+    def signal(self) -> SignalFactory:
+        """获取信号工厂。"""
+        if self._signal_factory is None:
+            self._signal_factory = SignalFactory(self.clock_domain)
+        return self._signal_factory
+
+    @contextmanager
+    def module(
+        self,
+        inputs: list[CycleAwareSignal] | None = None,
+        description: str = "",
+    ) -> Iterator[_ModuleContext]:
+        """模块上下文管理器。
+        
+        进入时保存时钟域周期状态，退出时恢复。
+        """
+        self.clock_domain.push()
+        
+        ctx = _ModuleContext(inputs=inputs or [], description=description)
+        try:
+            yield ctx
+        finally:
+            self.clock_domain.pop()
+
+    def build(self, *args: Any, **kwargs: Any) -> Any:
+        """构建模块逻辑（子类需重写）。"""
+        raise NotImplementedError("Subclasses must implement build()")
+
+
+# =============================================================================
+# Cycle-Aware Advanced Primitives
+# =============================================================================
+
+
+@dataclass(frozen=True)
+class CycleAwarePop:
+    """周期感知队列弹出结果。"""
+    valid: CycleAwareSignal
+    data: CycleAwareSignal
+    fire: CycleAwareSignal
+
+
+class CycleAwareQueue:
+    """周期感知队列，封装 pyc.fifo。
+    
+    用法:
+        q = m.queue("q", domain=dom, width=8, depth=2)
+        accepted = q.push(data, when=in_valid)
+        p = q.pop(when=out_ready)
+        # p.valid / p.data / p.fire
+    """
+
+    def __init__(
+        self,
+        m: CycleAwareCircuit,
+        name: str,
+        *,
+        domain: CycleAwareDomain,
+        width: int,
+        depth: int,
+    ) -> None:
+        self.m = m
+        self.name = str(name)
+        self.width = int(width)
+        self.depth = int(depth)
+        self.domain = domain
+
+        if self.width <= 0:
+            raise ValueError("Queue width must be > 0")
+        if self.depth <= 0:
+            raise ValueError("Queue depth must be > 0")
+
+        domain._ensure_clk_rst()
+        assert domain.clk is not None and domain.rst is not None
+
+        # Input placeholders
+        self._in_valid = m.named_wire(f"{self.name}__in_valid", width=1)
+        self._in_data = m.named_wire(f"{self.name}__in_data", width=self.width)
+        self._out_ready = m.named_wire(f"{self.name}__out_ready", width=1)
+
+        # Underlying FIFO instance
+        in_ready, out_valid, out_data = m.fifo(
+            domain.clk,
+            domain.rst,
+            in_valid=self._in_valid,
+            in_data=self._in_data,
+            out_ready=self._out_ready,
+            depth=self.depth,
+        )
+        
+        # Wrap as CycleAwareSignal
+        self.in_ready = CycleAwareSignal(
+            m=m, sig=in_ready, cycle=domain.current_cycle,
+            domain=domain, name=f"{name}_in_ready",
+        )
+        self.out_valid = CycleAwareSignal(
+            m=m, sig=out_valid, cycle=domain.current_cycle,
+            domain=domain, name=f"{name}_out_valid",
+        )
+        self.out_data = CycleAwareSignal(
+            m=m, sig=out_data, cycle=domain.current_cycle,
+            domain=domain, name=f"{name}_out_data",
+        )
+
+        self._push_bound = False
+        self._pop_bound = False
+        self._push_valid_expr: CycleAwareSignal | int = 0
+        self._push_data_expr: CycleAwareSignal | int = 0
+        self._pop_ready_expr: CycleAwareSignal | int = 0
+
+        m.add_finalizer(self._finalize)
+
+    def push(
+        self,
+        data: CycleAwareSignal | int,
+        *,
+        when: CycleAwareSignal | int = 1,
+    ) -> CycleAwareSignal:
+        """入队操作，返回 fire 信号（valid && ready）。"""
+        if self._push_bound:
+            raise ValueError("Queue.push() may only be called once per Queue instance")
+        self._push_bound = True
+        self._push_valid_expr = when
+        self._push_data_expr = data
+        
+        when_sig = self._coerce_i1(when, ctx="queue push when")
+        fire = when_sig & self.in_ready
+        return fire.named(f"{self.name}_push_fire")
+
+    def pop(self, *, when: CycleAwareSignal | int = 1) -> CycleAwarePop:
+        """出队操作，返回 Pop 结构。"""
+        if self._pop_bound:
+            raise ValueError("Queue.pop() may only be called once per Queue instance")
+        self._pop_bound = True
+        self._pop_ready_expr = when
+        
+        when_sig = self._coerce_i1(when, ctx="queue pop when")
+        fire = self.out_valid & when_sig
+        return CycleAwarePop(
+            valid=self.out_valid,
+            data=self.out_data,
+            fire=fire.named(f"{self.name}_pop_fire"),
+        )
+
+    def _finalize(self) -> None:
+        """最终化：将绑定的表达式赋值给 FIFO 输入。"""
+        def to_sig(v: CycleAwareSignal | int) -> Signal:
+            if isinstance(v, CycleAwareSignal):
+                return v.sig
+            return self.m.const(int(v), width=1 if isinstance(v, int) and v in (0, 1) else _int_width(self._in_data.ty))
+        
+        if isinstance(self._push_valid_expr, int):
+            valid_sig = self.m.const(self._push_valid_expr, width=1)
+        else:
+            valid_sig = self._push_valid_expr.sig
+            
+        if isinstance(self._push_data_expr, int):
+            data_sig = self.m.const(self._push_data_expr, width=self.width)
+        else:
+            data_sig = self._push_data_expr.sig
+            
+        if isinstance(self._pop_ready_expr, int):
+            ready_sig = self.m.const(self._pop_ready_expr, width=1)
+        else:
+            ready_sig = self._pop_ready_expr.sig
+        
+        self.m.assign(self._in_valid, valid_sig)
+        self.m.assign(self._in_data, data_sig)
+        self.m.assign(self._out_ready, ready_sig)
+
+    def _coerce_i1(self, v: CycleAwareSignal | int, *, ctx: str) -> CycleAwareSignal:
+        """将值转换为 i1 信号。"""
+        if isinstance(v, CycleAwareSignal):
+            if v.ty != "i1":
+                raise TypeError(f"{ctx}: expected i1, got {v.ty}")
+            return v
+        if isinstance(v, int):
+            return self.domain.create_const(int(v) & 1, width=1)
+        raise TypeError(f"{ctx}: expected CycleAwareSignal or int")
+
+
+class CycleAwareByteMem:
+    """周期感知字节内存。
+    
+    用法:
+        mem = m.byte_mem("mem", domain=dom, depth=4096)
+        rdata = mem.read(raddr)
+        mem.write(waddr, wdata, wstrb, when=wvalid)
+    """
+
+    def __init__(
+        self,
+        m: CycleAwareCircuit,
+        name: str,
+        *,
+        domain: CycleAwareDomain,
+        depth: int,
+        data_width: int = 64,
+    ) -> None:
+        self.m = m
+        self.name = str(name)
+        self.domain = domain
+        self.depth = int(depth)
+        self.data_width = int(data_width)
+        self.strb_width = self.data_width // 8
+
+        domain._ensure_clk_rst()
+        assert domain.clk is not None and domain.rst is not None
+        self.clk = domain.clk
+        self.rst = domain.rst
+        
+        # Address width based on depth
+        self.addr_width = max(1, (depth - 1).bit_length())
+
+        # Placeholders for read/write ports
+        self._raddr: CycleAwareSignal | None = None
+        self._wvalid: CycleAwareSignal | int = 0
+        self._waddr: CycleAwareSignal | int = 0
+        self._wdata: CycleAwareSignal | int = 0
+        self._wstrb: CycleAwareSignal | int = 0
+        self._rdata: CycleAwareSignal | None = None
+        self._finalized = False
+
+        m.add_finalizer(self._finalize)
+
+    def read(self, raddr: CycleAwareSignal) -> CycleAwareSignal:
+        """读取内存，返回读数据信号。"""
+        self._raddr = raddr
+        
+        # Create placeholder for read data
+        rdata_placeholder = self.m.named_wire(f"{self.name}__rdata", width=self.data_width)
+        self._rdata = CycleAwareSignal(
+            m=self.m,
+            sig=rdata_placeholder,
+            cycle=self.domain.current_cycle,
+            domain=self.domain,
+            name=f"{self.name}_rdata",
+        )
+        return self._rdata
+
+    def write(
+        self,
+        waddr: CycleAwareSignal | int,
+        wdata: CycleAwareSignal | int,
+        wstrb: CycleAwareSignal | int,
+        *,
+        when: CycleAwareSignal | int = 1,
+    ) -> None:
+        """写入内存。"""
+        self._wvalid = when
+        self._waddr = waddr
+        self._wdata = wdata
+        self._wstrb = wstrb
+
+    def _finalize(self) -> None:
+        """最终化：创建底层内存实例。"""
+        if self._finalized:
+            return
+        self._finalized = True
+
+        def to_sig(v: CycleAwareSignal | int, width: int) -> Signal:
+            if isinstance(v, CycleAwareSignal):
+                return v.sig
+            return self.m.const(int(v), width=width)
+
+        raddr_val = self._raddr if self._raddr is not None else self.domain.create_const(0, width=self.addr_width)
+        raddr_sig = to_sig(raddr_val, self.addr_width)
+        wvalid_sig = to_sig(self._wvalid, 1)
+        waddr_sig = to_sig(self._waddr, self.addr_width)
+        wdata_sig = to_sig(self._wdata, self.data_width)
+        wstrb_sig = to_sig(self._wstrb, self.strb_width)
+
+        # Create actual byte_mem using base Circuit method (via dsl.Module)
+        # Note: We need to use the low-level dsl.Module.byte_mem which takes positional args
+        from .dsl import Module
+        rdata_sig = Module.byte_mem(
+            self.m,
+            self.clk,
+            self.rst,
+            raddr_sig,
+            wvalid_sig,
+            waddr_sig,
+            wdata_sig,
+            wstrb_sig,
+            depth=self.depth,
+            name=self.name,
+        )
+
+        # Connect byte_mem output to the placeholder wire
+        if self._rdata is not None:
+            self.m.assign(self._rdata.sig, rdata_sig)
+
+
+@dataclass
+class CycleAwareBundle:
+    """周期感知结构体，支持命名字段打包/解包。
+    
+    用法:
+        bundle = CycleAwareBundle(tag=tag_sig, data=data_sig)
+        packed = bundle.pack()
+        unpacked = bundle.unpack(packed)
+        field = unpacked["tag"]
+    """
+    fields: dict[str, CycleAwareSignal]
+
+    def __post_init__(self) -> None:
+        if not self.fields:
+            raise ValueError("CycleAwareBundle cannot be empty")
+        # Ensure all signals belong to the same circuit
+        sigs = list(self.fields.values())
+        m0 = sigs[0].m
+        for s in sigs[1:]:
+            if s.m is not m0:
+                raise ValueError("CycleAwareBundle fields must belong to the same circuit")
+
+    def __getitem__(self, key: str) -> CycleAwareSignal:
+        return self.fields[str(key)]
+
+    def items(self) -> Iterable[tuple[str, CycleAwareSignal]]:
+        return self.fields.items()
+
+    @property
+    def m(self) -> CycleAwareCircuit:
+        return list(self.fields.values())[0].m
+
+    @property
+    def domain(self) -> CycleAwareDomain:
+        return list(self.fields.values())[0].domain
+
+    def pack(self) -> CycleAwareSignal:
+        """将所有字段打包为单个信号 (MSB-first)。"""
+        elems = list(self.fields.values())
+        return ca_cat(*elems)
+
+    def unpack(self, packed: CycleAwareSignal) -> "CycleAwareBundle":
+        """从打包的信号中解包字段。"""
+        out: dict[str, CycleAwareSignal] = {}
+        offset = 0
+        # Unpack in reverse order (LSB first)
+        for name, template in reversed(list(self.fields.items())):
+            width = template.width
+            field = packed[offset:offset + width]
+            out[name] = field.named(name)
+            offset += width
+        # Restore original order
+        return CycleAwareBundle({k: out[k] for k in self.fields.keys()})
+
+
+def ca_bundle(**fields: CycleAwareSignal) -> CycleAwareBundle:
+    """创建周期感知结构体的便捷函数。
+    
+    用法: b = ca_bundle(tag=tag_sig, data=data_sig)
+    """
+    return CycleAwareBundle(fields)
+
+
+class CycleAwareReg:
+    """周期感知寄存器，支持条件更新。
+    
+    用法:
+        reg = m.ca_reg("counter", domain=dom, width=8, init=0)
+        reg.set(reg.out() + 1, when=enable)
+        val = reg.out()
+    """
+
+    def __init__(
+        self,
+        m: CycleAwareCircuit,
+        name: str,
+        *,
+        domain: CycleAwareDomain,
+        width: int,
+        init: int = 0,
+    ) -> None:
+        self.m = m
+        self.name = str(name)
+        self.width = int(width)
+        self.init = int(init)
+        self.domain = domain
+
+        if self.width <= 0:
+            raise ValueError("Reg width must be > 0")
+
+        domain._ensure_clk_rst()
+        assert domain.clk is not None and domain.rst is not None
+        self.clk = domain.clk
+        self.rst = domain.rst
+
+        # 条件更新列表: [(value, condition), ...]
+        self._updates: list[tuple[CycleAwareSignal | int, CycleAwareSignal | int]] = []
+        
+        # 输出信号占位符
+        self._out_wire = m.named_wire(f"{self.name}__q", width=self.width)
+        self._out_sig = CycleAwareSignal(
+            m=m,
+            sig=self._out_wire,
+            cycle=domain.current_cycle,
+            domain=domain,
+            name=f"{self.name}_q",
+        )
+        
+        self._finalized = False
+        m.add_finalizer(self._finalize)
+
+    def out(self) -> CycleAwareSignal:
+        """获取寄存器当前值。"""
+        return self._out_sig
+
+    def set(
+        self,
+        value: CycleAwareSignal | int,
+        *,
+        when: CycleAwareSignal | int = 1,
+    ) -> None:
+        """条件更新寄存器。
+        
+        多个 set() 调用形成优先级链：后调用的优先级更高。
+        """
+        self._updates.append((value, when))
+
+    def _finalize(self) -> None:
+        """最终化：构建 mux 树和寄存器。"""
+        if self._finalized:
+            return
+        self._finalized = True
+
+        # 构建 mux 树: 从 init 开始，每个 update 覆盖
+        # next_val = mux(cond_n, val_n, mux(cond_n-1, val_n-1, ... mux(cond_1, val_1, current)))
+        
+        def to_sig(v: CycleAwareSignal | int, w: int) -> Signal:
+            if isinstance(v, CycleAwareSignal):
+                return v.sig
+            return self.m.const(int(v), width=w)
+
+        # 当前值（即寄存器输出）
+        current = self._out_wire
+        
+        if self._updates:
+            # 从第一个 update 开始构建 mux 树
+            next_val = current  # 默认保持当前值
+            for val, cond in self._updates:
+                val_sig = to_sig(val, self.width)
+                cond_sig = to_sig(cond, 1)
+                next_val = self.m.mux(cond_sig, val_sig, next_val)
+        else:
+            # 无更新，保持当前值
+            next_val = current
+
+        # 创建寄存器
+        en = self.m.const(1, width=1)
+        init_sig = self.m.const(self.init, width=self.width)
+        q = self.m.reg(self.clk, self.rst, en, next_val, init_sig)
+        
+        # 连接输出
+        self.m.assign(self._out_wire, q)

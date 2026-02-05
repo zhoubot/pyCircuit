@@ -1,77 +1,128 @@
 from __future__ import annotations
 
-from pycircuit import Circuit, Reg, Vec, Wire, jit_inline
-from pycircuit.dsl import Signal
+from pycircuit import (
+    CycleAwareCircuit,
+    CycleAwareDomain,
+    CycleAwareReg,
+    CycleAwareSignal,
+    mux,
+)
 
 from .isa import REG_INVALID
 
 
-def make_gpr(m: Circuit, clk: Signal, rst: Signal, *, boot_sp: Wire, en: Wire) -> list[Reg]:
+def make_gpr(
+    m: CycleAwareCircuit,
+    domain: CycleAwareDomain,
+    *,
+    boot_sp: CycleAwareSignal,
+) -> list[CycleAwareReg]:
     """24-entry GPR file (r0 forced to 0, r1 initialized to boot_sp)."""
-    zero64 = m.const_wire(0, width=64)
-    regs: list[Reg] = []
+    regs: list[CycleAwareReg] = []
     for i in range(24):
-        init = boot_sp if i == 1 else zero64
-        regs.append(m.out(f"r{i}", clk=clk, rst=rst, width=64, init=init, en=en))
+        # r0 is always 0, r1 is initialized to boot_sp
+        # Note: init value must be int, so we use 0 for all and handle boot_sp in main
+        init = 0
+        regs.append(m.ca_reg(f"r{i}", domain=domain, width=64, init=init))
     return regs
 
 
-def make_regs(m: Circuit, clk: Signal, rst: Signal, *, count: int, width: int, init: Wire, en: Wire) -> list[Reg]:
-    regs: list[Reg] = []
+def make_regs(
+    m: CycleAwareCircuit,
+    domain: CycleAwareDomain,
+    *,
+    count: int,
+    width: int,
+    init: int = 0,
+) -> list[CycleAwareReg]:
+    regs: list[CycleAwareReg] = []
     for i in range(count):
-        regs.append(m.out(f"r{i}", clk=clk, rst=rst, width=width, init=init, en=en))
+        regs.append(m.ca_reg(f"r{i}", domain=domain, width=width, init=init))
     return regs
 
 
-def read_reg(m: Circuit, code: Wire, *, gpr: list[Reg], t: list[Reg], u: list[Reg], default: Wire) -> Wire:
+def read_reg(
+    m: CycleAwareCircuit,
+    code: CycleAwareSignal,
+    *,
+    gpr: list[CycleAwareReg],
+    t: list[CycleAwareReg],
+    u: list[CycleAwareReg],
+    default: CycleAwareSignal,
+) -> CycleAwareSignal:
     """Mux-based regfile read with strict defaulting (out-of-range -> default)."""
-    c = m.const_wire
-    v: Wire = default
+    v: CycleAwareSignal = default
 
     for i in range(24):
-        vv = default if i == 0 else gpr[i]
-        v = code.eq(c(i, width=6)).select(vv, v)
+        vv = default if i == 0 else gpr[i].out()
+        cond = code.eq(i)
+        v = mux(cond, vv, v)
     for i in range(4):
-        v = code.eq(c(24 + i, width=6)).select(t[i], v)
+        cond = code.eq(24 + i)
+        v = mux(cond, t[i].out(), v)
     for i in range(4):
-        v = code.eq(c(28 + i, width=6)).select(u[i], v)
+        cond = code.eq(28 + i)
+        v = mux(cond, u[i].out(), v)
     return v
 
 
-@jit_inline
-def stack_next(m: Circuit, arr: list[Reg], *, do_push: Wire, do_clear: Wire, value: Wire) -> Vec:
+def stack_next(
+    m: CycleAwareCircuit,
+    arr: list[CycleAwareReg],
+    *,
+    do_push: CycleAwareSignal,
+    do_clear: CycleAwareSignal,
+    value: CycleAwareSignal,
+) -> list[CycleAwareSignal]:
+    """Compute next values for a 4-entry stack."""
     n0 = arr[0].out()
     n1 = arr[1].out()
     n2 = arr[2].out()
     n3 = arr[3].out()
 
-    if do_push:
-        n3 = n2
-        n2 = n1
-        n1 = n0
-        n0 = value
+    zero64 = m.ca_const(0, width=64)
 
-    # Clear overrides push (matches previous priority).
-    if do_clear:
-        n0 = 0
-        n1 = 0
-        n2 = 0
-        n3 = 0
+    # Push: shift down and insert at top
+    n0_push = value
+    n1_push = n0
+    n2_push = n1
+    n3_push = n2
 
-    return m.vec(n0, n1, n2, n3)
+    n0 = mux(do_push, n0_push, n0)
+    n1 = mux(do_push, n1_push, n1)
+    n2 = mux(do_push, n2_push, n2)
+    n3 = mux(do_push, n3_push, n3)
+
+    # Clear overrides push
+    n0 = mux(do_clear, zero64, n0)
+    n1 = mux(do_clear, zero64, n1)
+    n2 = mux(do_clear, zero64, n2)
+    n3 = mux(do_clear, zero64, n3)
+
+    return [n0, n1, n2, n3]
 
 
-def commit_gpr(m: Circuit, gpr: list[Reg], *, do_reg_write: Wire, regdst: Reg, value: Reg) -> None:
-    c = m.const_wire
-    zero64 = m.const_wire(0, width=64)
+def commit_gpr(
+    m: CycleAwareCircuit,
+    gpr: list[CycleAwareReg],
+    *,
+    do_reg_write: CycleAwareSignal,
+    regdst: CycleAwareSignal,
+    value: CycleAwareSignal,
+) -> None:
+    zero64 = m.ca_const(0, width=64)
     for i in range(24):
         if i == 0:
             gpr[i].set(zero64)
             continue
-        we = do_reg_write & regdst.eq(c(i, width=6))
+        we = do_reg_write & regdst.eq(i)
         gpr[i].set(value, when=we)
 
 
-def commit_stack(m: Circuit, arr: list[Reg], next_vals: list[Wire]) -> None:
+def commit_stack(
+    m: CycleAwareCircuit,
+    arr: list[CycleAwareReg],
+    next_vals: list[CycleAwareSignal],
+) -> None:
     for i in range(4):
         arr[i].set(next_vals[i])

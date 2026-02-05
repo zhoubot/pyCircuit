@@ -2,64 +2,64 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from pycircuit import Reg
+from pycircuit import CycleAwareReg
 
 
 @dataclass(frozen=True)
 class CoreState:
-    stage: Reg
-    pc: Reg
-    br_kind: Reg
-    br_base_pc: Reg
-    br_off: Reg
-    commit_cond: Reg
-    commit_tgt: Reg
-    cycles: Reg
-    halted: Reg
+    stage: CycleAwareReg
+    pc: CycleAwareReg
+    br_kind: CycleAwareReg
+    br_base_pc: CycleAwareReg
+    br_off: CycleAwareReg
+    commit_cond: CycleAwareReg
+    commit_tgt: CycleAwareReg
+    cycles: CycleAwareReg
+    halted: CycleAwareReg
 
 
 @dataclass(frozen=True)
 class IfIdRegs:
-    window: Reg
+    window: CycleAwareReg
 
 
 @dataclass(frozen=True)
 class IdExRegs:
-    op: Reg
-    len_bytes: Reg
-    regdst: Reg
-    srcl: Reg
-    srcr: Reg
-    srcp: Reg
-    imm: Reg
-    srcl_val: Reg
-    srcr_val: Reg
-    srcp_val: Reg
+    op: CycleAwareReg
+    len_bytes: CycleAwareReg
+    regdst: CycleAwareReg
+    srcl: CycleAwareReg
+    srcr: CycleAwareReg
+    srcp: CycleAwareReg
+    imm: CycleAwareReg
+    srcl_val: CycleAwareReg
+    srcr_val: CycleAwareReg
+    srcp_val: CycleAwareReg
 
 
 @dataclass(frozen=True)
 class ExMemRegs:
-    op: Reg
-    len_bytes: Reg
-    regdst: Reg
-    alu: Reg
-    is_load: Reg
-    is_store: Reg
-    size: Reg
-    addr: Reg
-    wdata: Reg
+    op: CycleAwareReg
+    len_bytes: CycleAwareReg
+    regdst: CycleAwareReg
+    alu: CycleAwareReg
+    is_load: CycleAwareReg
+    is_store: CycleAwareReg
+    size: CycleAwareReg
+    addr: CycleAwareReg
+    wdata: CycleAwareReg
 
 
 @dataclass(frozen=True)
 class MemWbRegs:
-    op: Reg
-    len_bytes: Reg
-    regdst: Reg
-    value: Reg
+    op: CycleAwareReg
+    len_bytes: CycleAwareReg
+    regdst: CycleAwareReg
+    value: CycleAwareReg
 
 
 @dataclass(frozen=True)
 class RegFiles:
-    gpr: list[Reg]
-    t: list[Reg]
-    u: list[Reg]
+    gpr: list[CycleAwareReg]
+    t: list[CycleAwareReg]
+    u: list[CycleAwareReg]

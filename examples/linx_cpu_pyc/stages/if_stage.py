@@ -1,10 +1,14 @@
 from __future__ import annotations
 
-from pycircuit import Circuit, Reg, Wire, jit_inline
+from pycircuit import CycleAwareCircuit, CycleAwareReg, CycleAwareSignal
 
 
-@jit_inline
-def build_if_stage(m: Circuit, *, do_if: Wire, ifid_window: Reg, mem_rdata: Wire) -> None:
+def build_if_stage(
+    m: CycleAwareCircuit,
+    *,
+    do_if: CycleAwareSignal,
+    ifid_window: CycleAwareReg,
+    mem_rdata: CycleAwareSignal,
+) -> None:
     # IF stage: latch instruction window.
-    with m.scope("IF"):
-        ifid_window.set(mem_rdata, when=do_if)
+    ifid_window.set(mem_rdata, when=do_if)

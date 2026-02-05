@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from pycircuit import Circuit, Wire, jit_inline
+from pycircuit import CycleAwareCircuit, CycleAwareSignal, mux
 
 from .isa import (
     OP_ADDTPC,
@@ -39,18 +39,17 @@ from .util import masked_eq
 
 @dataclass(frozen=True)
 class Decode:
-    op: Wire
-    len_bytes: Wire
-    regdst: Wire
-    srcl: Wire
-    srcr: Wire
-    srcp: Wire
-    imm: Wire
+    op: CycleAwareSignal
+    len_bytes: CycleAwareSignal
+    regdst: CycleAwareSignal
+    srcl: CycleAwareSignal
+    srcr: CycleAwareSignal
+    srcp: CycleAwareSignal
+    imm: CycleAwareSignal
 
 
-@jit_inline
-def decode_window(m: Circuit, window: Wire) -> Decode:
-    c = m.const_wire
+def decode_window(m: CycleAwareCircuit, window: CycleAwareSignal) -> Decode:
+    c = m.ca_const
 
     zero3 = c(0, width=3)
     zero64 = c(0, width=64)
@@ -61,7 +60,7 @@ def decode_window(m: Circuit, window: Wire) -> Decode:
     insn48 = window.trunc(width=48)
 
     low4 = insn16[0:4]
-    is_hl = low4 == 0xE
+    is_hl = low4.eq(0xE)
 
     is32 = insn16[0]
     in32 = (~is_hl) & is32
@@ -85,7 +84,6 @@ def decode_window(m: Circuit, window: Wire) -> Decode:
     simm17_s64 = insn32[15:32].sext(width=64)
 
     # HL.LUI immediate packing (48-bit):
-    # pfx = insn48[15:0]; main = insn48[47:16]
     pfx16 = insn48.trunc(width=16)
     main32 = insn48[16:48]
     imm_hi12 = pfx16[4:16]
@@ -98,15 +96,13 @@ def decode_window(m: Circuit, window: Wire) -> Decode:
     # 16-bit fields.
     rd16 = insn16[11:16]
     rs16 = insn16[6:11]
-    # Immediate fields:
-    # - simm5_11_s5: bits[15:11] (used by loads/stores)
-    # - simm5_6_s5: bits[10:6] (used by C.MOVI / C.SETRET)
     simm5_11_s64 = insn16[11:16].sext(width=64)
     simm5_6_s64 = insn16[6:11].sext(width=64)
     simm12_s64_c = insn16[4:16].sext(width=64)
     uimm5 = insn16[6:11]
     brtype = insn16[11:14]
 
+    # Default values
     op = c(OP_INVALID, width=6)
     len_bytes = zero3
     regdst = reg_invalid
@@ -115,195 +111,169 @@ def decode_window(m: Circuit, window: Wire) -> Decode:
     srcp = reg_invalid
     imm = zero64
 
-    # --- 16-bit decode (reverse priority; C.BSTOP highest) ---
+    # --- 16-bit decode (using mux chain, reverse priority) ---
     cond = in16 & masked_eq(insn16, mask=0x003F, match=0x0016)
-    if cond:
-        op = OP_C_MOVI
-        len_bytes = 2
-        regdst = rd16
-        imm = simm5_6_s64
+    op = mux(cond, c(OP_C_MOVI, width=6), op)
+    len_bytes = mux(cond, c(2, width=3), len_bytes)
+    regdst = mux(cond, rd16, regdst)
+    imm = mux(cond, simm5_6_s64, imm)
 
     cond = in16 & masked_eq(insn16, mask=0xF83F, match=0x5016)
-    if cond:
-        op = OP_C_SETRET
-        len_bytes = 2
-        regdst = 10  # ra
-        imm = uimm5.zext(width=6).shl(amount=1)
+    op = mux(cond, c(OP_C_SETRET, width=6), op)
+    len_bytes = mux(cond, c(2, width=3), len_bytes)
+    regdst = mux(cond, c(10, width=6), regdst)  # ra
+    imm = mux(cond, uimm5.zext(width=6).shl(amount=1).zext(width=64), imm)
 
     cond = in16 & masked_eq(insn16, mask=0x003F, match=0x002A)
-    if cond:
-        op = OP_C_SWI
-        len_bytes = 2
-        srcl = rs16
-        srcr = 24
-        imm = simm5_11_s64
+    op = mux(cond, c(OP_C_SWI, width=6), op)
+    len_bytes = mux(cond, c(2, width=3), len_bytes)
+    srcl = mux(cond, rs16, srcl)
+    srcr = mux(cond, c(24, width=6), srcr)
+    imm = mux(cond, simm5_11_s64, imm)
 
     cond = in16 & masked_eq(insn16, mask=0x003F, match=0x000A)
-    if cond:
-        op = OP_C_LWI
-        len_bytes = 2
-        srcl = rs16
-        imm = simm5_11_s64
+    op = mux(cond, c(OP_C_LWI, width=6), op)
+    len_bytes = mux(cond, c(2, width=3), len_bytes)
+    srcl = mux(cond, rs16, srcl)
+    imm = mux(cond, simm5_11_s64, imm)
 
     cond = in16 & masked_eq(insn16, mask=0x003F, match=0x0006)
-    if cond:
-        op = OP_C_MOVR
-        len_bytes = 2
-        regdst = rd16
-        srcl = rs16
+    op = mux(cond, c(OP_C_MOVR, width=6), op)
+    len_bytes = mux(cond, c(2, width=3), len_bytes)
+    regdst = mux(cond, rd16, regdst)
+    srcl = mux(cond, rs16, srcl)
 
     cond = in16 & masked_eq(insn16, mask=0x003F, match=0x0026)
-    if cond:
-        op = OP_C_SETC_EQ
-        len_bytes = 2
-        srcl = rs16
-        srcr = rd16
+    op = mux(cond, c(OP_C_SETC_EQ, width=6), op)
+    len_bytes = mux(cond, c(2, width=3), len_bytes)
+    srcl = mux(cond, rs16, srcl)
+    srcr = mux(cond, rd16, srcr)
 
     cond = in16 & masked_eq(insn16, mask=0xF83F, match=0x001C)
-    if cond:
-        op = OP_C_SETC_TGT
-        len_bytes = 2
-        srcl = rs16
+    op = mux(cond, c(OP_C_SETC_TGT, width=6), op)
+    len_bytes = mux(cond, c(2, width=3), len_bytes)
+    srcl = mux(cond, rs16, srcl)
 
     cond = in16 & masked_eq(insn16, mask=0x000F, match=0x0004)
-    if cond:
-        op = OP_C_BSTART_COND
-        len_bytes = 2
-        imm = simm12_s64_c.shl(amount=1)
+    op = mux(cond, c(OP_C_BSTART_COND, width=6), op)
+    len_bytes = mux(cond, c(2, width=3), len_bytes)
+    imm = mux(cond, simm12_s64_c.shl(amount=1), imm)
 
     cond = in16 & masked_eq(insn16, mask=0xC7FF, match=0x0000)
-    if cond:
-        op = OP_C_BSTART_STD
-        len_bytes = 2
-        imm = brtype
+    op = mux(cond, c(OP_C_BSTART_STD, width=6), op)
+    len_bytes = mux(cond, c(2, width=3), len_bytes)
+    imm = mux(cond, brtype.zext(width=64), imm)
 
     cond = in16 & masked_eq(insn16, mask=0xFFFF, match=0x0000)
-    if cond:
-        op = OP_C_BSTOP
-        len_bytes = 2
+    op = mux(cond, c(OP_C_BSTOP, width=6), op)
+    len_bytes = mux(cond, c(2, width=3), len_bytes)
 
-    # --- 32-bit decode (reverse priority; EBREAK highest) ---
+    # --- 32-bit decode (reverse priority) ---
     cond = in32 & masked_eq(insn32, mask=0x0000707F, match=0x00004025)
-    if cond:
-        op = OP_XORW
-        len_bytes = 4
-        regdst = rd32
-        srcl = rs1_32
-        srcr = rs2_32
+    op = mux(cond, c(OP_XORW, width=6), op)
+    len_bytes = mux(cond, c(4, width=3), len_bytes)
+    regdst = mux(cond, rd32, regdst)
+    srcl = mux(cond, rs1_32, srcl)
+    srcr = mux(cond, rs2_32, srcr)
 
     cond = in32 & masked_eq(insn32, mask=0x0000707F, match=0x00002025)
-    if cond:
-        op = OP_ANDW
-        len_bytes = 4
-        regdst = rd32
-        srcl = rs1_32
-        srcr = rs2_32
+    op = mux(cond, c(OP_ANDW, width=6), op)
+    len_bytes = mux(cond, c(4, width=3), len_bytes)
+    regdst = mux(cond, rd32, regdst)
+    srcl = mux(cond, rs1_32, srcl)
+    srcr = mux(cond, rs2_32, srcr)
 
     cond = in32 & masked_eq(insn32, mask=0x0000707F, match=0x00003025)
-    if cond:
-        op = OP_ORW
-        len_bytes = 4
-        regdst = rd32
-        srcl = rs1_32
-        srcr = rs2_32
+    op = mux(cond, c(OP_ORW, width=6), op)
+    len_bytes = mux(cond, c(4, width=3), len_bytes)
+    regdst = mux(cond, rd32, regdst)
+    srcl = mux(cond, rs1_32, srcl)
+    srcr = mux(cond, rs2_32, srcr)
 
     cond = in32 & masked_eq(insn32, mask=0x0000707F, match=0x00000025)
-    if cond:
-        op = OP_ADDW
-        len_bytes = 4
-        regdst = rd32
-        srcl = rs1_32
-        srcr = rs2_32
+    op = mux(cond, c(OP_ADDW, width=6), op)
+    len_bytes = mux(cond, c(4, width=3), len_bytes)
+    regdst = mux(cond, rd32, regdst)
+    srcl = mux(cond, rs1_32, srcl)
+    srcr = mux(cond, rs2_32, srcr)
 
     cond = in32 & masked_eq(insn32, mask=0x0000707F, match=0x00000077)
-    if cond:
-        op = OP_CSEL
-        len_bytes = 4
-        regdst = rd32
-        srcl = rs1_32
-        srcr = rs2_32
-        srcp = srcp_32
+    op = mux(cond, c(OP_CSEL, width=6), op)
+    len_bytes = mux(cond, c(4, width=3), len_bytes)
+    regdst = mux(cond, rd32, regdst)
+    srcl = mux(cond, rs1_32, srcl)
+    srcr = mux(cond, rs2_32, srcr)
+    srcp = mux(cond, srcp_32, srcp)
 
     cond = in32 & masked_eq(insn32, mask=0x0000707F, match=0x00002059)
-    if cond:
-        op = OP_SWI
-        len_bytes = 4
-        srcl = rs1_32
-        srcr = rs2_32
-        imm = simm12_s64
+    op = mux(cond, c(OP_SWI, width=6), op)
+    len_bytes = mux(cond, c(4, width=3), len_bytes)
+    srcl = mux(cond, rs1_32, srcl)
+    srcr = mux(cond, rs2_32, srcr)
+    imm = mux(cond, simm12_s64, imm)
 
     cond = in32 & masked_eq(insn32, mask=0x0000707F, match=0x00003059)
-    if cond:
-        op = OP_SDI
-        len_bytes = 4
-        srcl = rs1_32
-        srcr = rs2_32
-        imm = simm12_s64
+    op = mux(cond, c(OP_SDI, width=6), op)
+    len_bytes = mux(cond, c(4, width=3), len_bytes)
+    srcl = mux(cond, rs1_32, srcl)
+    srcr = mux(cond, rs2_32, srcr)
+    imm = mux(cond, simm12_s64, imm)
 
     cond = in32 & masked_eq(insn32, mask=0x0000707F, match=0x00002019)
-    if cond:
-        op = OP_LWI
-        len_bytes = 4
-        regdst = rd32
-        srcl = rs1_32
-        imm = imm12_s64
+    op = mux(cond, c(OP_LWI, width=6), op)
+    len_bytes = mux(cond, c(4, width=3), len_bytes)
+    regdst = mux(cond, rd32, regdst)
+    srcl = mux(cond, rs1_32, srcl)
+    imm = mux(cond, imm12_s64, imm)
 
     cond = in32 & masked_eq(insn32, mask=0x0000707F, match=0x00000035)
-    if cond:
-        op = OP_ADDIW
-        len_bytes = 4
-        regdst = rd32
-        srcl = rs1_32
-        imm = imm12_u64
+    op = mux(cond, c(OP_ADDIW, width=6), op)
+    len_bytes = mux(cond, c(4, width=3), len_bytes)
+    regdst = mux(cond, rd32, regdst)
+    srcl = mux(cond, rs1_32, srcl)
+    imm = mux(cond, imm12_u64.zext(width=64), imm)
 
     cond = in32 & masked_eq(insn32, mask=0x0000707F, match=0x00000015)
-    if cond:
-        op = OP_ADDI
-        len_bytes = 4
-        regdst = rd32
-        srcl = rs1_32
-        imm = imm12_u64
+    op = mux(cond, c(OP_ADDI, width=6), op)
+    len_bytes = mux(cond, c(4, width=3), len_bytes)
+    regdst = mux(cond, rd32, regdst)
+    srcl = mux(cond, rs1_32, srcl)
+    imm = mux(cond, imm12_u64.zext(width=64), imm)
 
     cond = in32 & masked_eq(insn32, mask=0x0000707F, match=0x00001015)
-    if cond:
-        op = OP_SUBI
-        len_bytes = 4
-        regdst = rd32
-        srcl = rs1_32
-        imm = imm12_u64
+    op = mux(cond, c(OP_SUBI, width=6), op)
+    len_bytes = mux(cond, c(4, width=3), len_bytes)
+    regdst = mux(cond, rd32, regdst)
+    srcl = mux(cond, rs1_32, srcl)
+    imm = mux(cond, imm12_u64.zext(width=64), imm)
 
     cond = in32 & masked_eq(insn32, mask=0xF800707F, match=0x00000045)
-    if cond:
-        op = OP_CMP_EQ
-        len_bytes = 4
-        regdst = rd32
-        srcl = rs1_32
-        srcr = rs2_32
+    op = mux(cond, c(OP_CMP_EQ, width=6), op)
+    len_bytes = mux(cond, c(4, width=3), len_bytes)
+    regdst = mux(cond, rd32, regdst)
+    srcl = mux(cond, rs1_32, srcl)
+    srcr = mux(cond, rs2_32, srcr)
 
     cond = in32 & masked_eq(insn32, mask=0xF0FFFFFF, match=0x0010102B)
-    if cond:
-        op = OP_EBREAK
-        len_bytes = 4
+    op = mux(cond, c(OP_EBREAK, width=6), op)
+    len_bytes = mux(cond, c(4, width=3), len_bytes)
 
     cond = in32 & masked_eq(insn32, mask=0x0000007F, match=0x00000007)
-    if cond:
-        op = OP_ADDTPC
-        len_bytes = 4
-        regdst = rd32
-        imm = imm20_s64.shl(amount=12)
+    op = mux(cond, c(OP_ADDTPC, width=6), op)
+    len_bytes = mux(cond, c(4, width=3), len_bytes)
+    regdst = mux(cond, rd32, regdst)
+    imm = mux(cond, imm20_s64.shl(amount=12), imm)
 
     cond = in32 & masked_eq(insn32, mask=0x00007FFF, match=0x00004001)
-    if cond:
-        op = OP_BSTART_STD_CALL
-        len_bytes = 4
-        imm = simm17_s64.shl(amount=1)
+    op = mux(cond, c(OP_BSTART_STD_CALL, width=6), op)
+    len_bytes = mux(cond, c(4, width=3), len_bytes)
+    imm = mux(cond, simm17_s64.shl(amount=1), imm)
 
-    # --- 48-bit HL.LUI (highest priority overall) ---
+    # --- 48-bit HL.LUI (highest priority) ---
     cond = is_hl & masked_eq(insn48, mask=0x0000007F000F, match=0x00000017000E)
-    if cond:
-        op = OP_HL_LUI
-        len_bytes = 6
-        regdst = rd_hl
-        imm = imm_hl_lui
+    op = mux(cond, c(OP_HL_LUI, width=6), op)
+    len_bytes = mux(cond, c(6, width=3), len_bytes)
+    regdst = mux(cond, rd_hl, regdst)
+    imm = mux(cond, imm_hl_lui, imm)
 
     return Decode(op=op, len_bytes=len_bytes, regdst=regdst, srcl=srcl, srcr=srcr, srcp=srcp, imm=imm)

@@ -53,6 +53,38 @@ def build(m: Circuit, STAGES: int = 3) -> None:
     m.output("out_tag", out["tag"])
 ```
 
+## Cycle-Aware API (New)
+
+pyCircuit includes a new **cycle-aware** programming paradigm that tracks signal timing automatically:
+
+```python
+from pycircuit import compile_cycle_aware, mux
+
+def counter(m, domain, width=8):
+    # Cycle 0: inputs
+    enable = domain.create_signal("enable", width=1)
+    count = domain.create_const(0, width=width, name="count")
+    
+    # Combinational logic
+    count_next = mux(enable, count + 1, count)
+    
+    # Cycle 1: register
+    domain.next()
+    count_reg = domain.cycle(count_next, reset_value=0, name="count")
+    
+    m.output("count", count_reg.sig)
+
+circuit = compile_cycle_aware(counter, name="counter", width=8)
+print(circuit.emit_mlir())
+```
+
+Key features:
+- **Automatic cycle balancing**: When combining signals of different cycles, DFFs are inserted automatically
+- **Cycle management**: `domain.next()`, `prev()`, `push()`, `pop()` for precise cycle control
+- **JIT compilation**: Python functions compile directly to MLIR
+
+See `docs/CYCLE_AWARE_API.md` for the full API reference and `examples/counter_cycle_aware.py` for more examples.
+
 ## Build (pyc-compile / pyc-opt)
 
 Prereqs:
