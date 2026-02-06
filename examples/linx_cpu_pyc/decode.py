@@ -10,20 +10,33 @@ from .isa import (
     OP_ADDIW,
     OP_ADD,
     OP_ADDW,
+    OP_AND,
     OP_ANDI,
     OP_ANDIW,
     OP_BSTART_STD_COND,
     OP_BSTART_STD_DIRECT,
     OP_BSTART_STD_FALL,
     OP_ANDW,
+    OP_BXS,
     OP_BXU,
     OP_BSTART_STD_CALL,
     OP_CMP_EQ,
+    OP_CMP_EQI,
+    OP_CMP_NE,
+    OP_CMP_NEI,
+    OP_CMP_ANDI,
+    OP_CMP_ORI,
+    OP_CMP_LT,
+    OP_CMP_LTI,
     OP_CMP_LTUI,
     OP_CMP_LTU,
+    OP_CMP_GEI,
+    OP_CMP_GEUI,
     OP_C_ADD,
     OP_C_ADDI,
+    OP_C_AND,
     OP_C_OR,
+    OP_C_SUB,
     OP_CSEL,
     OP_C_BSTART_DIRECT,
     OP_C_BSTOP,
@@ -60,24 +73,73 @@ from .isa import (
     OP_HL_SW_PCR,
     OP_INVALID,
     OP_LB,
+    OP_LBI,
+    OP_LBU,
     OP_LBUI,
+    OP_LD,
+    OP_LH,
+    OP_LHI,
+    OP_LHU,
+    OP_LHUI,
     OP_LDI,
     OP_LUI,
     OP_LW,
     OP_LWI,
+    OP_LWU,
+    OP_LWUI,
+    OP_MADD,
+    OP_MADDW,
+    OP_MUL,
+    OP_MULW,
     OP_OR,
     OP_ORI,
     OP_ORIW,
     OP_ORW,
+    OP_XOR,
+    OP_XORIW,
+    OP_DIV,
+    OP_DIVU,
+    OP_DIVW,
+    OP_DIVUW,
+    OP_REM,
+    OP_REMU,
+    OP_REMW,
+    OP_REMUW,
+    OP_SB,
+    OP_SETC_AND,
+    OP_SETC_EQ,
+    OP_SETC_GE,
+    OP_SETC_GEI,
+    OP_SETC_GEU,
     OP_SETC_GEUI,
+    OP_SETC_LT,
+    OP_SETC_LTI,
+    OP_SETC_LTU,
+    OP_SETC_LTUI,
+    OP_SETC_NE,
+    OP_SETC_NEI,
+    OP_SETC_OR,
+    OP_SETC_ORI,
+    OP_SETC_ANDI,
+    OP_SETC_EQI,
     OP_SETRET,
+    OP_SBI,
+    OP_SD,
+    OP_SH,
+    OP_SHI,
     OP_SDI,
     OP_SLL,
     OP_SLLI,
+    OP_SLLIW,
     OP_SRL,
+    OP_SRA,
+    OP_SRAIW,
     OP_SRLIW,
+    OP_SW,
     OP_SUB,
     OP_SUBI,
+    OP_SUBIW,
+    OP_SUBW,
     OP_SWI,
     OP_XORW,
     REG_INVALID,
@@ -190,6 +252,22 @@ def decode_window(m: Circuit, window: Wire) -> Decode:
         srcl = rs16
         srcr = rd16
 
+    cond = in16 & masked_eq(insn16, mask=0x003F, match=0x0018)
+    if cond:
+        op = OP_C_SUB
+        len_bytes = 2
+        regdst = 31  # t-hand
+        srcl = rs16
+        srcr = rd16
+
+    cond = in16 & masked_eq(insn16, mask=0x003F, match=0x0028)
+    if cond:
+        op = OP_C_AND
+        len_bytes = 2
+        regdst = 31  # t-hand
+        srcl = rs16
+        srcr = rd16
+
     cond = in16 & masked_eq(insn16, mask=0x003F, match=0x0016)
     if cond:
         op = OP_C_MOVI
@@ -284,6 +362,23 @@ def decode_window(m: Circuit, window: Wire) -> Decode:
         regdst = 31  # t-hand
         srcl = rs16
 
+    # C.CMP.EQI/NEI: compare t#1 against simm5, write 0/1 to t-hand.
+    cond = in16 & masked_eq(insn16, mask=0xF83F, match=0x002C)
+    if cond:
+        op = OP_CMP_EQI
+        len_bytes = 2
+        regdst = 31  # t-hand
+        srcl = 24  # t#1
+        imm = simm5_6_s64
+
+    cond = in16 & masked_eq(insn16, mask=0xF83F, match=0x082C)
+    if cond:
+        op = OP_CMP_NEI
+        len_bytes = 2
+        regdst = 31  # t-hand
+        srcl = 24  # t#1
+        imm = simm5_6_s64
+
     cond = in16 & masked_eq(insn16, mask=0x000F, match=0x0002)
     if cond:
         op = OP_C_BSTART_DIRECT
@@ -375,9 +470,29 @@ def decode_window(m: Circuit, window: Wire) -> Decode:
         srcr_type = srcr_type_32
         shamt = shamt5_32
 
+    cond = in32 & masked_eq(insn32, mask=0x0000707F, match=0x00002005)
+    if cond:
+        op = OP_AND
+        len_bytes = 4
+        regdst = rd32
+        srcl = rs1_32
+        srcr = rs2_32
+        srcr_type = srcr_type_32
+        shamt = shamt5_32
+
     cond = in32 & masked_eq(insn32, mask=0x0000707F, match=0x00003005)
     if cond:
         op = OP_OR
+        len_bytes = 4
+        regdst = rd32
+        srcl = rs1_32
+        srcr = rs2_32
+        srcr_type = srcr_type_32
+        shamt = shamt5_32
+
+    cond = in32 & masked_eq(insn32, mask=0x0000707F, match=0x00004005)
+    if cond:
+        op = OP_XOR
         len_bytes = 4
         regdst = rd32
         srcl = rs1_32
@@ -417,6 +532,115 @@ def decode_window(m: Circuit, window: Wire) -> Decode:
         srcl = rs1_32
         imm = imm12_s64
 
+    cond = in32 & masked_eq(insn32, mask=0x0000707F, match=0x00004035)
+    if cond:
+        op = OP_XORIW
+        len_bytes = 4
+        regdst = rd32
+        srcl = rs1_32
+        imm = imm12_s64
+
+    # Mul/Div/Rem (benchmarks).
+    cond = in32 & masked_eq(insn32, mask=0xFE00707F, match=0x00000047)
+    if cond:
+        op = OP_MUL
+        len_bytes = 4
+        regdst = rd32
+        srcl = rs1_32
+        srcr = rs2_32
+
+    cond = in32 & masked_eq(insn32, mask=0xFE00707F, match=0x00002047)
+    if cond:
+        op = OP_MULW
+        len_bytes = 4
+        regdst = rd32
+        srcl = rs1_32
+        srcr = rs2_32
+
+    # MADD/MADDW: RegDst = SrcD + (SrcL * SrcR). SrcD is in bits[31:27] and is
+    # carried through our pipeline in `srcp`.
+    cond = in32 & masked_eq(insn32, mask=0x0600707F, match=0x00006047)
+    if cond:
+        op = OP_MADD
+        len_bytes = 4
+        regdst = rd32
+        srcl = rs1_32
+        srcr = rs2_32
+        srcp = srcp_32
+
+    cond = in32 & masked_eq(insn32, mask=0x0600707F, match=0x00007047)
+    if cond:
+        op = OP_MADDW
+        len_bytes = 4
+        regdst = rd32
+        srcl = rs1_32
+        srcr = rs2_32
+        srcp = srcp_32
+
+    cond = in32 & masked_eq(insn32, mask=0xFE00707F, match=0x00000057)
+    if cond:
+        op = OP_DIV
+        len_bytes = 4
+        regdst = rd32
+        srcl = rs1_32
+        srcr = rs2_32
+
+    cond = in32 & masked_eq(insn32, mask=0xFE00707F, match=0x00001057)
+    if cond:
+        op = OP_DIVU
+        len_bytes = 4
+        regdst = rd32
+        srcl = rs1_32
+        srcr = rs2_32
+
+    cond = in32 & masked_eq(insn32, mask=0xFE00707F, match=0x00002057)
+    if cond:
+        op = OP_DIVW
+        len_bytes = 4
+        regdst = rd32
+        srcl = rs1_32
+        srcr = rs2_32
+
+    cond = in32 & masked_eq(insn32, mask=0xFE00707F, match=0x00003057)
+    if cond:
+        op = OP_DIVUW
+        len_bytes = 4
+        regdst = rd32
+        srcl = rs1_32
+        srcr = rs2_32
+
+    cond = in32 & masked_eq(insn32, mask=0xFE00707F, match=0x00004057)
+    if cond:
+        op = OP_REM
+        len_bytes = 4
+        regdst = rd32
+        srcl = rs1_32
+        srcr = rs2_32
+
+    cond = in32 & masked_eq(insn32, mask=0xFE00707F, match=0x00005057)
+    if cond:
+        op = OP_REMU
+        len_bytes = 4
+        regdst = rd32
+        srcl = rs1_32
+        srcr = rs2_32
+
+    cond = in32 & masked_eq(insn32, mask=0xFE00707F, match=0x00006057)
+    if cond:
+        op = OP_REMW
+        len_bytes = 4
+        regdst = rd32
+        srcl = rs1_32
+        srcr = rs2_32
+
+    cond = in32 & masked_eq(insn32, mask=0xFE00707F, match=0x00007057)
+    if cond:
+        op = OP_REMUW
+        len_bytes = 4
+        regdst = rd32
+        srcl = rs1_32
+        srcr = rs2_32
+
     cond = in32 & masked_eq(insn32, mask=0xFE00707F, match=0x00007005)
     if cond:
         op = OP_SLL
@@ -428,6 +652,14 @@ def decode_window(m: Circuit, window: Wire) -> Decode:
     cond = in32 & masked_eq(insn32, mask=0xFE00707F, match=0x00005005)
     if cond:
         op = OP_SRL
+        len_bytes = 4
+        regdst = rd32
+        srcl = rs1_32
+        srcr = rs2_32
+
+    cond = in32 & masked_eq(insn32, mask=0xFE00707F, match=0x00006005)
+    if cond:
+        op = OP_SRA
         len_bytes = 4
         regdst = rd32
         srcl = rs1_32
@@ -449,6 +681,31 @@ def decode_window(m: Circuit, window: Wire) -> Decode:
         srcl = rs1_32
         shamt = rs2_32
 
+    cond = in32 & masked_eq(insn32, mask=0xFE00707F, match=0x00006035)
+    if cond:
+        op = OP_SRAIW
+        len_bytes = 4
+        regdst = rd32
+        srcl = rs1_32
+        shamt = rs2_32
+
+    cond = in32 & masked_eq(insn32, mask=0xFE00707F, match=0x00007035)
+    if cond:
+        op = OP_SLLIW
+        len_bytes = 4
+        regdst = rd32
+        srcl = rs1_32
+        shamt = rs2_32
+
+    cond = in32 & masked_eq(insn32, mask=0x0000707F, match=0x00000067)
+    if cond:
+        op = OP_BXS
+        len_bytes = 4
+        regdst = rd32
+        srcl = rs1_32
+        srcr = insn32[26:32]  # imms (lsb)
+        srcp = insn32[20:26]  # imml (width-1)
+
     cond = in32 & masked_eq(insn32, mask=0x0000707F, match=0x00001067)
     if cond:
         op = OP_BXU
@@ -467,12 +724,127 @@ def decode_window(m: Circuit, window: Wire) -> Decode:
         srcr = rs2_32
         srcr_type = srcr_type_32
 
+    # CMP.* immediate variants.
+    cond = in32 & masked_eq(insn32, mask=0x0000707F, match=0x00000055)
+    if cond:
+        op = OP_CMP_EQI
+        len_bytes = 4
+        regdst = rd32
+        srcl = rs1_32
+        imm = imm12_s64
+
+    cond = in32 & masked_eq(insn32, mask=0x0000707F, match=0x00001055)
+    if cond:
+        op = OP_CMP_NEI
+        len_bytes = 4
+        regdst = rd32
+        srcl = rs1_32
+        imm = imm12_s64
+
+    cond = in32 & masked_eq(insn32, mask=0x0000707F, match=0x00002055)
+    if cond:
+        op = OP_CMP_ANDI
+        len_bytes = 4
+        regdst = rd32
+        srcl = rs1_32
+        imm = imm12_s64
+
+    cond = in32 & masked_eq(insn32, mask=0x0000707F, match=0x00003055)
+    if cond:
+        op = OP_CMP_ORI
+        len_bytes = 4
+        regdst = rd32
+        srcl = rs1_32
+        imm = imm12_s64
+
+    cond = in32 & masked_eq(insn32, mask=0x0000707F, match=0x00004055)
+    if cond:
+        op = OP_CMP_LTI
+        len_bytes = 4
+        regdst = rd32
+        srcl = rs1_32
+        imm = imm12_s64
+
+    cond = in32 & masked_eq(insn32, mask=0x0000707F, match=0x00005055)
+    if cond:
+        op = OP_CMP_GEI
+        len_bytes = 4
+        regdst = rd32
+        srcl = rs1_32
+        imm = imm12_s64
+
     cond = in32 & masked_eq(insn32, mask=0x0000707F, match=0x00006055)
     if cond:
         op = OP_CMP_LTUI
         len_bytes = 4
         regdst = rd32
         srcl = rs1_32
+        imm = imm12_u64
+
+    cond = in32 & masked_eq(insn32, mask=0x0000707F, match=0x00007055)
+    if cond:
+        op = OP_CMP_GEUI
+        len_bytes = 4
+        regdst = rd32
+        srcl = rs1_32
+        imm = imm12_u64
+
+    # SETC.* immediate variants (opcode 0x75): update commit_cond (committed in WB).
+    # These encode shamt in bits[11:7] (RegDst field in the ISA).
+    cond = in32 & masked_eq(insn32, mask=0x0000707F, match=0x00000075)
+    if cond:
+        op = OP_SETC_EQI
+        len_bytes = 4
+        srcl = rs1_32
+        shamt = rd32  # bits[11:7]
+        imm = imm12_s64
+
+    cond = in32 & masked_eq(insn32, mask=0x0000707F, match=0x00001075)
+    if cond:
+        op = OP_SETC_NEI
+        len_bytes = 4
+        srcl = rs1_32
+        shamt = rd32
+        imm = imm12_s64
+
+    cond = in32 & masked_eq(insn32, mask=0x0000707F, match=0x00002075)
+    if cond:
+        op = OP_SETC_ANDI
+        len_bytes = 4
+        srcl = rs1_32
+        shamt = rd32
+        imm = imm12_s64
+
+    cond = in32 & masked_eq(insn32, mask=0x0000707F, match=0x00003075)
+    if cond:
+        op = OP_SETC_ORI
+        len_bytes = 4
+        srcl = rs1_32
+        shamt = rd32
+        imm = imm12_s64
+
+    cond = in32 & masked_eq(insn32, mask=0x0000707F, match=0x00004075)
+    if cond:
+        op = OP_SETC_LTI
+        len_bytes = 4
+        srcl = rs1_32
+        shamt = rd32
+        imm = imm12_s64
+
+    cond = in32 & masked_eq(insn32, mask=0x0000707F, match=0x00005075)
+    if cond:
+        op = OP_SETC_GEI
+        len_bytes = 4
+        srcl = rs1_32
+        shamt = rd32
+        imm = imm12_s64
+
+    cond = in32 & masked_eq(insn32, mask=0x0000707F, match=0x00006075)
+    if cond:
+        op = OP_SETC_LTUI
+        len_bytes = 4
+        srcl = rs1_32
+        shamt = rd32
         imm = imm12_u64
 
     cond = in32 & masked_eq(insn32, mask=0x0000707F, match=0x00007075)
@@ -482,6 +854,71 @@ def decode_window(m: Circuit, window: Wire) -> Decode:
         srcl = rs1_32
         shamt = rd32  # bits[11:7]
         imm = imm12_u64
+
+    # SETC.* (register forms): update commit_cond (committed in WB).
+    cond = in32 & masked_eq(insn32, mask=0xF800707F, match=0x00000065)
+    if cond:
+        op = OP_SETC_EQ
+        len_bytes = 4
+        srcl = rs1_32
+        srcr = rs2_32
+        srcr_type = srcr_type_32
+
+    cond = in32 & masked_eq(insn32, mask=0xF800707F, match=0x00001065)
+    if cond:
+        op = OP_SETC_NE
+        len_bytes = 4
+        srcl = rs1_32
+        srcr = rs2_32
+        srcr_type = srcr_type_32
+
+    cond = in32 & masked_eq(insn32, mask=0xF800707F, match=0x00002065)
+    if cond:
+        op = OP_SETC_AND
+        len_bytes = 4
+        srcl = rs1_32
+        srcr = rs2_32
+        srcr_type = srcr_type_32
+
+    cond = in32 & masked_eq(insn32, mask=0xF800707F, match=0x00003065)
+    if cond:
+        op = OP_SETC_OR
+        len_bytes = 4
+        srcl = rs1_32
+        srcr = rs2_32
+        srcr_type = srcr_type_32
+
+    cond = in32 & masked_eq(insn32, mask=0xF800707F, match=0x00004065)
+    if cond:
+        op = OP_SETC_LT
+        len_bytes = 4
+        srcl = rs1_32
+        srcr = rs2_32
+        srcr_type = srcr_type_32
+
+    cond = in32 & masked_eq(insn32, mask=0xF800707F, match=0x00006065)
+    if cond:
+        op = OP_SETC_LTU
+        len_bytes = 4
+        srcl = rs1_32
+        srcr = rs2_32
+        srcr_type = srcr_type_32
+
+    cond = in32 & masked_eq(insn32, mask=0xF800707F, match=0x00005065)
+    if cond:
+        op = OP_SETC_GE
+        len_bytes = 4
+        srcl = rs1_32
+        srcr = rs2_32
+        srcr_type = srcr_type_32
+
+    cond = in32 & masked_eq(insn32, mask=0xF800707F, match=0x00007065)
+    if cond:
+        op = OP_SETC_GEU
+        len_bytes = 4
+        srcl = rs1_32
+        srcr = rs2_32
+        srcr_type = srcr_type_32
 
     # SETC.TGT: set commit target to SrcL (legal only inside a non-FALL block in the ISA).
     cond = in32 & masked_eq(insn32, mask=0xFFF07FFF, match=0x0000403B)
@@ -498,6 +935,38 @@ def decode_window(m: Circuit, window: Wire) -> Decode:
         srcl = rs1_32
         imm = imm12_s64
 
+    cond = in32 & masked_eq(insn32, mask=0x0000707F, match=0x00000019)
+    if cond:
+        op = OP_LBI
+        len_bytes = 4
+        regdst = rd32
+        srcl = rs1_32
+        imm = imm12_s64
+
+    cond = in32 & masked_eq(insn32, mask=0x0000707F, match=0x00001019)
+    if cond:
+        op = OP_LHI
+        len_bytes = 4
+        regdst = rd32
+        srcl = rs1_32
+        imm = imm12_s64
+
+    cond = in32 & masked_eq(insn32, mask=0x0000707F, match=0x00005019)
+    if cond:
+        op = OP_LHUI
+        len_bytes = 4
+        regdst = rd32
+        srcl = rs1_32
+        imm = imm12_s64
+
+    cond = in32 & masked_eq(insn32, mask=0x0000707F, match=0x00006019)
+    if cond:
+        op = OP_LWUI
+        len_bytes = 4
+        regdst = rd32
+        srcl = rs1_32
+        imm = imm12_s64
+
     cond = in32 & masked_eq(insn32, mask=0x0000707F, match=0x00000009)
     if cond:
         op = OP_LB
@@ -508,9 +977,59 @@ def decode_window(m: Circuit, window: Wire) -> Decode:
         srcr_type = srcr_type_32
         shamt = shamt5_32
 
+    cond = in32 & masked_eq(insn32, mask=0x0000707F, match=0x00004009)
+    if cond:
+        op = OP_LBU
+        len_bytes = 4
+        regdst = rd32
+        srcl = rs1_32
+        srcr = rs2_32
+        srcr_type = srcr_type_32
+        shamt = shamt5_32
+
+    cond = in32 & masked_eq(insn32, mask=0x0000707F, match=0x00001009)
+    if cond:
+        op = OP_LH
+        len_bytes = 4
+        regdst = rd32
+        srcl = rs1_32
+        srcr = rs2_32
+        srcr_type = srcr_type_32
+        shamt = shamt5_32
+
+    cond = in32 & masked_eq(insn32, mask=0x0000707F, match=0x00005009)
+    if cond:
+        op = OP_LHU
+        len_bytes = 4
+        regdst = rd32
+        srcl = rs1_32
+        srcr = rs2_32
+        srcr_type = srcr_type_32
+        shamt = shamt5_32
+
     cond = in32 & masked_eq(insn32, mask=0x0000707F, match=0x00002009)
     if cond:
         op = OP_LW
+        len_bytes = 4
+        regdst = rd32
+        srcl = rs1_32
+        srcr = rs2_32
+        srcr_type = srcr_type_32
+        shamt = shamt5_32
+
+    cond = in32 & masked_eq(insn32, mask=0x0000707F, match=0x00006009)
+    if cond:
+        op = OP_LWU
+        len_bytes = 4
+        regdst = rd32
+        srcl = rs1_32
+        srcr = rs2_32
+        srcr_type = srcr_type_32
+        shamt = shamt5_32
+
+    cond = in32 & masked_eq(insn32, mask=0x0000707F, match=0x00003009)
+    if cond:
+        op = OP_LD
         len_bytes = 4
         regdst = rd32
         srcl = rs1_32
@@ -603,6 +1122,16 @@ def decode_window(m: Circuit, window: Wire) -> Decode:
         srcr_type = srcr_type_32
         shamt = shamt5_32
 
+    cond = in32 & masked_eq(insn32, mask=0x0000707F, match=0x00001025)
+    if cond:
+        op = OP_SUBW
+        len_bytes = 4
+        regdst = rd32
+        srcl = rs1_32
+        srcr = rs2_32
+        srcr_type = srcr_type_32
+        shamt = shamt5_32
+
     cond = in32 & masked_eq(insn32, mask=0x0000707F, match=0x00000077)
     if cond:
         op = OP_CSEL
@@ -612,6 +1141,23 @@ def decode_window(m: Circuit, window: Wire) -> Decode:
         srcr = rs2_32
         srcr_type = srcr_type_32
         srcp = srcp_32
+
+    # Stores (immediate offset).
+    cond = in32 & masked_eq(insn32, mask=0x0000707F, match=0x00000059)
+    if cond:
+        op = OP_SBI
+        len_bytes = 4
+        srcl = rs1_32
+        srcr = rs2_32
+        imm = simm12_s64
+
+    cond = in32 & masked_eq(insn32, mask=0x0000707F, match=0x00001059)
+    if cond:
+        op = OP_SHI
+        len_bytes = 4
+        srcl = rs1_32
+        srcr = rs2_32
+        imm = simm12_s64
 
     cond = in32 & masked_eq(insn32, mask=0x0000707F, match=0x00002059)
     if cond:
@@ -629,6 +1175,48 @@ def decode_window(m: Circuit, window: Wire) -> Decode:
         srcr = rs2_32
         imm = simm12_s64
 
+    # Stores (indexed). Encoding uses SrcD in bits[31:27], SrcL base in bits[19:15], SrcR idx in bits[24:20].
+    # We map: srcp=value (SrcD), srcl=base (SrcL), srcr=index (SrcR), srcr_type=SrcRType, shamt=fixed scale.
+    cond = in32 & masked_eq(insn32, mask=0x00007FFF, match=0x00000049)
+    if cond:
+        op = OP_SB
+        len_bytes = 4
+        srcp = insn32[27:32]
+        srcl = rs1_32
+        srcr = rs2_32
+        srcr_type = srcr_type_32
+        shamt = 0
+
+    cond = in32 & masked_eq(insn32, mask=0x00007FFF, match=0x00001049)
+    if cond:
+        op = OP_SH
+        len_bytes = 4
+        srcp = insn32[27:32]
+        srcl = rs1_32
+        srcr = rs2_32
+        srcr_type = srcr_type_32
+        shamt = 1
+
+    cond = in32 & masked_eq(insn32, mask=0x00007FFF, match=0x00002049)
+    if cond:
+        op = OP_SW
+        len_bytes = 4
+        srcp = insn32[27:32]
+        srcl = rs1_32
+        srcr = rs2_32
+        srcr_type = srcr_type_32
+        shamt = 2
+
+    cond = in32 & masked_eq(insn32, mask=0x00007FFF, match=0x00003049)
+    if cond:
+        op = OP_SD
+        len_bytes = 4
+        srcp = insn32[27:32]
+        srcl = rs1_32
+        srcr = rs2_32
+        srcr_type = srcr_type_32
+        shamt = 3
+
     cond = in32 & masked_eq(insn32, mask=0x0000707F, match=0x00002019)
     if cond:
         op = OP_LWI
@@ -640,6 +1228,14 @@ def decode_window(m: Circuit, window: Wire) -> Decode:
     cond = in32 & masked_eq(insn32, mask=0x0000707F, match=0x00000035)
     if cond:
         op = OP_ADDIW
+        len_bytes = 4
+        regdst = rd32
+        srcl = rs1_32
+        imm = imm12_u64
+
+    cond = in32 & masked_eq(insn32, mask=0x0000707F, match=0x00001035)
+    if cond:
+        op = OP_SUBIW
         len_bytes = 4
         regdst = rd32
         srcl = rs1_32
@@ -664,6 +1260,24 @@ def decode_window(m: Circuit, window: Wire) -> Decode:
     cond = in32 & masked_eq(insn32, mask=0xF800707F, match=0x00000045)
     if cond:
         op = OP_CMP_EQ
+        len_bytes = 4
+        regdst = rd32
+        srcl = rs1_32
+        srcr = rs2_32
+        srcr_type = srcr_type_32
+
+    cond = in32 & masked_eq(insn32, mask=0xF800707F, match=0x00001045)
+    if cond:
+        op = OP_CMP_NE
+        len_bytes = 4
+        regdst = rd32
+        srcl = rs1_32
+        srcr = rs2_32
+        srcr_type = srcr_type_32
+
+    cond = in32 & masked_eq(insn32, mask=0xF800707F, match=0x00004045)
+    if cond:
+        op = OP_CMP_LT
         len_bytes = 4
         regdst = rd32
         srcl = rs1_32
@@ -776,6 +1390,18 @@ def decode_window(m: Circuit, window: Wire) -> Decode:
             op = OP_HL_SW_PCR
         if funct3 == 3:
             op = OP_HL_SD_PCR
+
+    # HL.ANDI: extended immediate variant of ANDI (simm24).
+    cond = is_hl & masked_eq(insn48, mask=0x0000707F000F, match=0x00002015000E)
+    if cond:
+        op = OP_ANDI
+        len_bytes = 6
+        regdst = rd_hl
+        srcl = main32[15:20]
+        imm_hi12 = pfx16[4:16]
+        imm_lo12 = main32[20:32]
+        imm24 = imm_hi12.zext(width=24).shl(amount=12) | imm_lo12.zext(width=24)
+        imm = imm24.sext(width=64)
 
     cond = is_hl & masked_eq(insn48, mask=0x0000007F000F, match=0x00000017000E)
     if cond:

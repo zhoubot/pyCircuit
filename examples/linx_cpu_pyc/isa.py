@@ -89,6 +89,89 @@ OP_HL_SB_PCR = 72
 OP_HL_SH_PCR = 73
 OP_HL_SD_PCR = 74
 
+# --- additional memory ops (benchmarks / full ISA bring-up) ---
+# Immediate offset loads.
+OP_LBI = 75
+OP_LHI = 76
+OP_LHUI = 77
+OP_LWUI = 78
+
+# Indexed loads.
+OP_LBU = 79
+OP_LH = 80
+OP_LHU = 81
+OP_LWU = 82
+OP_LD = 83
+
+# Immediate offset stores.
+OP_SBI = 84
+OP_SHI = 85
+
+# Indexed stores.
+OP_SB = 86
+OP_SH = 87
+OP_SW = 88
+OP_SD = 89
+
+# --- SETC.* (BlockISA commit condition setters) ---
+OP_SETC_EQ = 90
+OP_SETC_NE = 91
+OP_SETC_AND = 92
+OP_SETC_OR = 93
+OP_SETC_LT = 94
+OP_SETC_LTU = 95
+OP_SETC_GE = 96
+OP_SETC_GEU = 97
+
+# SETC.* immediate variants (opcode 0x75 in the ISA; shamt comes from bits[11:7]).
+OP_SETC_EQI = 98
+OP_SETC_NEI = 99
+OP_SETC_ANDI = 100
+OP_SETC_ORI = 101
+OP_SETC_LTI = 102
+OP_SETC_GEI = 103
+OP_SETC_LTUI = 104
+
+# --- CMP.* immediate variants (write 0/1 to RegDst) ---
+OP_CMP_EQI = 105
+OP_CMP_NEI = 106
+OP_CMP_ANDI = 107
+OP_CMP_ORI = 108
+OP_CMP_LTI = 109
+OP_CMP_GEI = 110
+OP_CMP_GEUI = 111
+
+# --- Mul/Div/Rem (benchmarks) ---
+OP_MUL = 112
+OP_MULW = 113
+OP_DIV = 114
+OP_DIVU = 115
+OP_DIVW = 116
+OP_DIVUW = 117
+OP_REM = 118
+OP_REMU = 119
+OP_REMW = 120
+OP_REMUW = 121
+
+# Optional 4-operand fused ops (decoder uses SrcD in bits[31:27], mapped to `srcp`).
+OP_MADD = 122
+OP_MADDW = 123
+
+# --- additional bring-up ops (benchmarks / ISA completeness) ---
+OP_AND = 124
+OP_BXS = 125
+OP_SLLIW = 126
+OP_SUBW = 127
+OP_SRAIW = 128
+OP_CMP_NE = 129
+OP_C_SUB = 130
+OP_C_AND = 131
+OP_SUBIW = 132
+OP_SRA = 133
+OP_XOR = 134
+OP_XORIW = 135
+OP_CMP_LT = 136
+
 REG_INVALID = 0x3F
 
 ST_IF = 0

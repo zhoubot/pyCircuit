@@ -28,7 +28,22 @@ from ..isa import (
     OP_FEXIT,
     OP_FRET_RA,
     OP_FRET_STK,
+    OP_SETC_AND,
+    OP_SETC_ANDI,
+    OP_SETC_EQ,
+    OP_SETC_EQI,
+    OP_SETC_GE,
+    OP_SETC_GEI,
+    OP_SETC_GEU,
     OP_SETC_GEUI,
+    OP_SETC_LT,
+    OP_SETC_LTI,
+    OP_SETC_LTU,
+    OP_SETC_LTUI,
+    OP_SETC_NE,
+    OP_SETC_NEI,
+    OP_SETC_OR,
+    OP_SETC_ORI,
 )
 from ..pipeline import CoreState, MemWbRegs
 
@@ -136,7 +151,42 @@ def build_wb_stage(
         op_c_setc_eq = op == OP_C_SETC_EQ
         op_c_setc_ne = op == OP_C_SETC_NE
         op_setc_geui = op == OP_SETC_GEUI
+        op_setc_eq = op == OP_SETC_EQ
+        op_setc_ne = op == OP_SETC_NE
+        op_setc_and = op == OP_SETC_AND
+        op_setc_or = op == OP_SETC_OR
+        op_setc_lt = op == OP_SETC_LT
+        op_setc_ltu = op == OP_SETC_LTU
+        op_setc_ge = op == OP_SETC_GE
+        op_setc_geu = op == OP_SETC_GEU
+        op_setc_eqi = op == OP_SETC_EQI
+        op_setc_nei = op == OP_SETC_NEI
+        op_setc_andi = op == OP_SETC_ANDI
+        op_setc_ori = op == OP_SETC_ORI
+        op_setc_lti = op == OP_SETC_LTI
+        op_setc_gei = op == OP_SETC_GEI
+        op_setc_ltui = op == OP_SETC_LTUI
         op_c_setc_tgt = op == OP_C_SETC_TGT
+        op_setc_any = (
+            op_c_setc_eq
+            | op_c_setc_ne
+            | op_setc_geui
+            | op_setc_eq
+            | op_setc_ne
+            | op_setc_and
+            | op_setc_or
+            | op_setc_lt
+            | op_setc_ltu
+            | op_setc_ge
+            | op_setc_geu
+            | op_setc_eqi
+            | op_setc_nei
+            | op_setc_andi
+            | op_setc_ori
+            | op_setc_lti
+            | op_setc_gei
+            | op_setc_ltui
+        )
 
         commit_cond_next = commit_cond
         commit_tgt_next = commit_tgt
@@ -144,11 +194,7 @@ def build_wb_stage(
         if do_wb & op_is_boundary:
             commit_cond_next = 0
             commit_tgt_next = 0
-        if do_wb & op_c_setc_eq:
-            commit_cond_next = value[0]
-        if do_wb & op_c_setc_ne:
-            commit_cond_next = value[0]
-        if do_wb & op_setc_geui:
+        if do_wb & op_setc_any:
             commit_cond_next = value[0]
         if do_wb & op_c_setc_tgt:
             commit_tgt_next = value

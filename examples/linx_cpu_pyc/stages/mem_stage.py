@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pycircuit import Circuit, Wire, jit_inline
 
-from ..isa import OP_HL_LBU_PCR, OP_HL_LHU_PCR, OP_HL_LWU_PCR, OP_LBUI
+from ..isa import OP_HL_LBU_PCR, OP_HL_LHU_PCR, OP_HL_LWU_PCR, OP_LBUI, OP_LBU, OP_LHUI, OP_LHU, OP_LWUI, OP_LWU
 from ..pipeline import ExMemRegs, MemWbRegs
 
 
@@ -88,17 +88,17 @@ def build_mem_stage(
 
         load_val = m.const(0, width=64)
         if size == 1:
-            if (op == OP_LBUI) | (op == OP_HL_LBU_PCR):
+            if (op == OP_LBUI) | (op == OP_LBU) | (op == OP_HL_LBU_PCR):
                 load_val = b0.zext(width=64)
             else:
                 load_val = b0.sext(width=64)
         if size == 2:
-            if op == OP_HL_LHU_PCR:
+            if (op == OP_LHUI) | (op == OP_LHU) | (op == OP_HL_LHU_PCR):
                 load_val = half16.zext(width=64)
             else:
                 load_val = half16.sext(width=64)
         if size == 4:
-            if op == OP_HL_LWU_PCR:
+            if (op == OP_LWUI) | (op == OP_LWU) | (op == OP_HL_LWU_PCR):
                 load_val = word32.zext(width=64)
             else:
                 load_val = word32.sext(width=64)

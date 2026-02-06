@@ -7,6 +7,7 @@ from ..isa import (
     OP_ADDI,
     OP_ADDIW,
     OP_ADD,
+    OP_AND,
     OP_ANDI,
     OP_ANDIW,
     OP_BSTART_STD_COND,
@@ -14,17 +15,29 @@ from ..isa import (
     OP_BSTART_STD_FALL,
     OP_ADDW,
     OP_ANDW,
+    OP_BXS,
     OP_BXU,
     OP_BSTART_STD_CALL,
     OP_CMP_EQ,
+    OP_CMP_EQI,
+    OP_CMP_LT,
+    OP_CMP_NE,
+    OP_CMP_NEI,
+    OP_CMP_ANDI,
+    OP_CMP_ORI,
+    OP_CMP_LTI,
     OP_CMP_LTUI,
     OP_CMP_LTU,
+    OP_CMP_GEI,
+    OP_CMP_GEUI,
     OP_C_ADD,
     OP_C_ADDI,
+    OP_C_AND,
     OP_C_BSTART_COND,
     OP_C_BSTART_DIRECT,
     OP_C_BSTART_STD,
     OP_C_OR,
+    OP_C_SUB,
     OP_CSEL,
     OP_C_LDI,
     OP_C_LWI,
@@ -51,24 +64,73 @@ from ..isa import (
     OP_HL_SH_PCR,
     OP_HL_SW_PCR,
     OP_LB,
+    OP_LBI,
+    OP_LBU,
     OP_LBUI,
+    OP_LD,
+    OP_LH,
+    OP_LHI,
+    OP_LHU,
+    OP_LHUI,
     OP_LDI,
     OP_LUI,
     OP_LW,
     OP_LWI,
+    OP_LWU,
+    OP_LWUI,
+    OP_MADD,
+    OP_MADDW,
+    OP_MUL,
+    OP_MULW,
     OP_OR,
     OP_ORI,
     OP_ORIW,
     OP_ORW,
+    OP_XOR,
+    OP_XORIW,
+    OP_DIV,
+    OP_DIVU,
+    OP_DIVW,
+    OP_DIVUW,
+    OP_REM,
+    OP_REMU,
+    OP_REMW,
+    OP_REMUW,
+    OP_SB,
+    OP_SETC_AND,
+    OP_SETC_ANDI,
+    OP_SETC_EQ,
+    OP_SETC_EQI,
+    OP_SETC_GE,
+    OP_SETC_GEI,
+    OP_SETC_GEU,
     OP_SETC_GEUI,
+    OP_SETC_LT,
+    OP_SETC_LTI,
+    OP_SETC_LTU,
+    OP_SETC_LTUI,
+    OP_SETC_NE,
+    OP_SETC_NEI,
+    OP_SETC_OR,
+    OP_SETC_ORI,
     OP_SETRET,
+    OP_SBI,
+    OP_SD,
+    OP_SH,
+    OP_SHI,
     OP_SLL,
     OP_SLLI,
+    OP_SLLIW,
     OP_SDI,
     OP_SRL,
+    OP_SRA,
+    OP_SRAIW,
     OP_SRLIW,
+    OP_SW,
     OP_SUB,
     OP_SUBI,
+    OP_SUBIW,
+    OP_SUBW,
     OP_SWI,
     OP_XORW,
     REG_INVALID,
@@ -235,27 +297,72 @@ def build_ex_stage(
         op_lui = op == OP_LUI
         op_add = op == OP_ADD
         op_sub = op == OP_SUB
+        op_and = op == OP_AND
         op_or = op == OP_OR
+        op_xor = op == OP_XOR
         op_addi = op == OP_ADDI
         op_subi = op == OP_SUBI
         op_andi = op == OP_ANDI
         op_ori = op == OP_ORI
         op_addiw = op == OP_ADDIW
+        op_subiw = op == OP_SUBIW
         op_andiw = op == OP_ANDIW
         op_oriw = op == OP_ORIW
+        op_xoriw = op == OP_XORIW
+        op_mul = op == OP_MUL
+        op_mulw = op == OP_MULW
+        op_madd = op == OP_MADD
+        op_maddw = op == OP_MADDW
+        op_div = op == OP_DIV
+        op_divu = op == OP_DIVU
+        op_divw = op == OP_DIVW
+        op_divuw = op == OP_DIVUW
+        op_rem = op == OP_REM
+        op_remu = op == OP_REMU
+        op_remw = op == OP_REMW
+        op_remuw = op == OP_REMUW
         op_sll = op == OP_SLL
         op_srl = op == OP_SRL
+        op_sra = op == OP_SRA
         op_slli = op == OP_SLLI
+        op_slliw = op == OP_SLLIW
+        op_sraiw = op == OP_SRAIW
         op_srliw = op == OP_SRLIW
+        op_bxs = op == OP_BXS
         op_bxu = op == OP_BXU
         op_addw = op == OP_ADDW
+        op_subw = op == OP_SUBW
         op_orw = op == OP_ORW
         op_andw = op == OP_ANDW
         op_xorw = op == OP_XORW
         op_cmp_eq = op == OP_CMP_EQ
+        op_cmp_ne = op == OP_CMP_NE
+        op_cmp_lt = op == OP_CMP_LT
+        op_cmp_eqi = op == OP_CMP_EQI
+        op_cmp_nei = op == OP_CMP_NEI
+        op_cmp_andi = op == OP_CMP_ANDI
+        op_cmp_ori = op == OP_CMP_ORI
+        op_cmp_lti = op == OP_CMP_LTI
         op_cmp_ltu = op == OP_CMP_LTU
         op_cmp_ltui = op == OP_CMP_LTUI
+        op_cmp_gei = op == OP_CMP_GEI
+        op_cmp_geui = op == OP_CMP_GEUI
         op_setc_geui = op == OP_SETC_GEUI
+        op_setc_eq = op == OP_SETC_EQ
+        op_setc_ne = op == OP_SETC_NE
+        op_setc_and = op == OP_SETC_AND
+        op_setc_or = op == OP_SETC_OR
+        op_setc_lt = op == OP_SETC_LT
+        op_setc_ltu = op == OP_SETC_LTU
+        op_setc_ge = op == OP_SETC_GE
+        op_setc_geu = op == OP_SETC_GEU
+        op_setc_eqi = op == OP_SETC_EQI
+        op_setc_nei = op == OP_SETC_NEI
+        op_setc_andi = op == OP_SETC_ANDI
+        op_setc_ori = op == OP_SETC_ORI
+        op_setc_lti = op == OP_SETC_LTI
+        op_setc_gei = op == OP_SETC_GEI
+        op_setc_ltui = op == OP_SETC_LTUI
         op_csel = op == OP_CSEL
         op_hl_lui = op == OP_HL_LUI
         op_hl_lb_pcr = op == OP_HL_LB_PCR
@@ -271,17 +378,34 @@ def build_ex_stage(
         op_hl_sd_pcr = op == OP_HL_SD_PCR
         op_lwi = op == OP_LWI
         op_c_lwi = op == OP_C_LWI
+        op_lbi = op == OP_LBI
         op_lbui = op == OP_LBUI
+        op_lhi = op == OP_LHI
+        op_lhui = op == OP_LHUI
+        op_lwui = op == OP_LWUI
         op_lb = op == OP_LB
+        op_lbu = op == OP_LBU
+        op_lh = op == OP_LH
+        op_lhu = op == OP_LHU
         op_lw = op == OP_LW
+        op_lwu = op == OP_LWU
+        op_ld = op == OP_LD
         op_ldi = op == OP_LDI
         op_c_add = op == OP_C_ADD
         op_c_addi = op == OP_C_ADDI
+        op_c_sub = op == OP_C_SUB
+        op_c_and = op == OP_C_AND
         op_c_or = op == OP_C_OR
         op_c_ldi = op == OP_C_LDI
+        op_sbi = op == OP_SBI
+        op_shi = op == OP_SHI
         op_swi = op == OP_SWI
         op_c_swi = op == OP_C_SWI
         op_c_sdi = op == OP_C_SDI
+        op_sb = op == OP_SB
+        op_sh = op == OP_SH
+        op_sw = op == OP_SW
+        op_sd = op == OP_SD
         op_c_sext_w = op == OP_C_SEXT_W
         op_c_zext_w = op == OP_C_ZEXT_W
         op_sdi = op == OP_SDI
@@ -418,6 +542,14 @@ def build_ex_stage(
             size = z4
             addr = z64
             wdata = z64
+        subiw = (srcl_val.trunc(width=32) - imm.trunc(width=32)).sext(width=64)
+        if op_subiw:
+            alu = subiw
+            is_load = z1
+            is_store = z1
+            size = z4
+            addr = z64
+            wdata = z64
 
         # LUI: immediate (already shifted by 12 in decode).
         if op_lui:
@@ -437,7 +569,7 @@ def build_ex_stage(
             addr = z64
             wdata = z64
 
-        # ADD/SUB/OR: 64-bit ops with SrcR modifiers + optional shift.
+        # ADD/SUB/AND/OR/XOR: 64-bit ops with SrcR modifiers + optional shift.
         if op_add:
             alu = srcl_val + srcr_addsub_shl
             is_load = z1
@@ -452,8 +584,22 @@ def build_ex_stage(
             size = z4
             addr = z64
             wdata = z64
+        if op_and:
+            alu = srcl_val & srcr_logic_shl
+            is_load = z1
+            is_store = z1
+            size = z4
+            addr = z64
+            wdata = z64
         if op_or:
             alu = srcl_val | srcr_logic_shl
+            is_load = z1
+            is_store = z1
+            size = z4
+            addr = z64
+            wdata = z64
+        if op_xor:
+            alu = srcl_val ^ srcr_logic_shl
             is_load = z1
             is_store = z1
             size = z4
@@ -491,6 +637,108 @@ def build_ex_stage(
             size = z4
             addr = z64
             wdata = z64
+        if op_xoriw:
+            alu = (srcl_val ^ imm).trunc(width=32).sext(width=64)
+            is_load = z1
+            is_store = z1
+            size = z4
+            addr = z64
+            wdata = z64
+
+        # Mul/Div/Rem.
+        if op_mul:
+            alu = srcl_val * srcr_val
+            is_load = z1
+            is_store = z1
+            size = z4
+            addr = z64
+            wdata = z64
+        if op_mulw:
+            alu = (srcl_val * srcr_val).trunc(width=32).sext(width=64)
+            is_load = z1
+            is_store = z1
+            size = z4
+            addr = z64
+            wdata = z64
+        if op_madd:
+            alu = srcp_val + (srcl_val * srcr_val)
+            is_load = z1
+            is_store = z1
+            size = z4
+            addr = z64
+            wdata = z64
+        if op_maddw:
+            alu = (srcp_val + (srcl_val * srcr_val)).trunc(width=32).sext(width=64)
+            is_load = z1
+            is_store = z1
+            size = z4
+            addr = z64
+            wdata = z64
+
+        if op_div:
+            alu = srcl_val.as_signed() // srcr_val.as_signed()
+            is_load = z1
+            is_store = z1
+            size = z4
+            addr = z64
+            wdata = z64
+        if op_divu:
+            alu = srcl_val.as_unsigned() // srcr_val.as_unsigned()
+            is_load = z1
+            is_store = z1
+            size = z4
+            addr = z64
+            wdata = z64
+        if op_divw:
+            l32 = srcl_val.trunc(width=32).sext(width=64).as_signed()
+            r32 = srcr_val.trunc(width=32).sext(width=64).as_signed()
+            alu = (l32 // r32).trunc(width=32).sext(width=64)
+            is_load = z1
+            is_store = z1
+            size = z4
+            addr = z64
+            wdata = z64
+        if op_divuw:
+            l32 = srcl_val.trunc(width=32).zext(width=64).as_unsigned()
+            r32 = srcr_val.trunc(width=32).zext(width=64).as_unsigned()
+            alu = (l32 // r32).trunc(width=32).sext(width=64)
+            is_load = z1
+            is_store = z1
+            size = z4
+            addr = z64
+            wdata = z64
+        if op_rem:
+            alu = srcl_val.as_signed() % srcr_val.as_signed()
+            is_load = z1
+            is_store = z1
+            size = z4
+            addr = z64
+            wdata = z64
+        if op_remu:
+            alu = srcl_val.as_unsigned() % srcr_val.as_unsigned()
+            is_load = z1
+            is_store = z1
+            size = z4
+            addr = z64
+            wdata = z64
+        if op_remw:
+            l32 = srcl_val.trunc(width=32).sext(width=64).as_signed()
+            r32 = srcr_val.trunc(width=32).sext(width=64).as_signed()
+            alu = (l32 % r32).trunc(width=32).sext(width=64)
+            is_load = z1
+            is_store = z1
+            size = z4
+            addr = z64
+            wdata = z64
+        if op_remuw:
+            l32 = srcl_val.trunc(width=32).zext(width=64).as_unsigned()
+            r32 = srcr_val.trunc(width=32).zext(width=64).as_unsigned()
+            alu = (l32 % r32).trunc(width=32).sext(width=64)
+            is_load = z1
+            is_store = z1
+            size = z4
+            addr = z64
+            wdata = z64
 
         # Shifts.
         if op_sll:
@@ -507,8 +755,35 @@ def build_ex_stage(
             size = z4
             addr = z64
             wdata = z64
+        if op_sra:
+            alu = ashr_var(m, srcl_val, srcr_val)
+            is_load = z1
+            is_store = z1
+            size = z4
+            addr = z64
+            wdata = z64
         if op_slli:
             alu = shl_var(m, srcl_val, shamt)
+            is_load = z1
+            is_store = z1
+            size = z4
+            addr = z64
+            wdata = z64
+        if op_slliw:
+            l32 = srcl_val.trunc(width=32).zext(width=64)
+            sh5 = shamt & 0x1F
+            shifted = shl_var(m, l32, sh5)
+            alu = shifted.trunc(width=32).sext(width=64)
+            is_load = z1
+            is_store = z1
+            size = z4
+            addr = z64
+            wdata = z64
+        if op_sraiw:
+            l32 = srcl_val.trunc(width=32).sext(width=64)
+            sh5 = shamt & 0x1F
+            shifted = ashr_var(m, l32, sh5)
+            alu = shifted.trunc(width=32).sext(width=64)
             is_load = z1
             is_store = z1
             size = z4
@@ -519,6 +794,25 @@ def build_ex_stage(
             sh5 = shamt & 0x1F
             shifted = lshr_var(m, l32, sh5)
             alu = shifted.trunc(width=32).sext(width=64)
+            is_load = z1
+            is_store = z1
+            size = z4
+            addr = z64
+            wdata = z64
+
+        # BXS: signed bit-field extract.
+        if op_bxs:
+            imms = srcr
+            imml = srcp
+            shifted = lshr_var(m, srcl_val, imms)
+            sh_mask_amt = m.const(63, width=64) - imml.zext(width=64)
+            mask = lshr_var(m, m.const(0xFFFF_FFFF_FFFF_FFFF, width=64), sh_mask_amt)
+            extracted = shifted & mask
+            valid = (imms.zext(width=64) + imml.zext(width=64)).ule(63)
+            # Sign-extend N=(imml+1) bits: (extracted << (63-imml)) >> (63-imml).
+            sh_ext = sh_mask_amt
+            sext = ashr_var(m, shl_var(m, extracted, sh_ext), sh_ext)
+            alu = valid.select(sext, z64)
             is_load = z1
             is_store = z1
             size = z4
@@ -543,11 +837,19 @@ def build_ex_stage(
 
         # ADDW/ORW/ANDW/XORW: word ops with SrcR modifiers + optional shift.
         addw = (srcl_val + srcr_addsub_shl).trunc(width=32).sext(width=64)
+        subw = (srcl_val - srcr_addsub_shl).trunc(width=32).sext(width=64)
         orw = (srcl_val | srcr_logic_shl).trunc(width=32).sext(width=64)
         andw = (srcl_val & srcr_logic_shl).trunc(width=32).sext(width=64)
         xorw = (srcl_val ^ srcr_logic_shl).trunc(width=32).sext(width=64)
         if op_addw:
             alu = addw
+            is_load = z1
+            is_store = z1
+            size = z4
+            addr = z64
+            wdata = z64
+        if op_subw:
+            alu = subw
             is_load = z1
             is_store = z1
             size = z4
@@ -588,6 +890,97 @@ def build_ex_stage(
             addr = z64
             wdata = z64
 
+        # CMP_NE: (srcl != SrcR_mod) ? 1 : 0 (same SrcR_mod as CMP_EQ).
+        cmp_ne = z64
+        if srcl_val != srcr_addsub_nosh:
+            cmp_ne = 1
+        if op_cmp_ne:
+            alu = cmp_ne
+            is_load = z1
+            is_store = z1
+            size = z4
+            addr = z64
+            wdata = z64
+
+        # CMP_LT: signed compare (srcl < SrcR_mod) ? 1 : 0.
+        cmp_lt = z64
+        if srcl_val.slt(srcr_addsub_nosh):
+            cmp_lt = 1
+        if op_cmp_lt:
+            alu = cmp_lt
+            is_load = z1
+            is_store = z1
+            size = z4
+            addr = z64
+            wdata = z64
+
+        # CMP.*I: compare SrcL against immediate.
+        cmp_eqi = z64
+        if srcl_val == imm:
+            cmp_eqi = 1
+        if op_cmp_eqi:
+            alu = cmp_eqi
+            is_load = z1
+            is_store = z1
+            size = z4
+            addr = z64
+            wdata = z64
+
+        cmp_nei = z64
+        if srcl_val != imm:
+            cmp_nei = 1
+        if op_cmp_nei:
+            alu = cmp_nei
+            is_load = z1
+            is_store = z1
+            size = z4
+            addr = z64
+            wdata = z64
+
+        cmp_andi = z64
+        if (srcl_val & imm) != 0:
+            cmp_andi = 1
+        if op_cmp_andi:
+            alu = cmp_andi
+            is_load = z1
+            is_store = z1
+            size = z4
+            addr = z64
+            wdata = z64
+
+        cmp_ori = z64
+        if (srcl_val | imm) != 0:
+            cmp_ori = 1
+        if op_cmp_ori:
+            alu = cmp_ori
+            is_load = z1
+            is_store = z1
+            size = z4
+            addr = z64
+            wdata = z64
+
+        cmp_lti = z64
+        if srcl_val.slt(imm):
+            cmp_lti = 1
+        if op_cmp_lti:
+            alu = cmp_lti
+            is_load = z1
+            is_store = z1
+            size = z4
+            addr = z64
+            wdata = z64
+
+        cmp_gei = z64
+        if ~srcl_val.slt(imm):
+            cmp_gei = 1
+        if op_cmp_gei:
+            alu = cmp_gei
+            is_load = z1
+            is_store = z1
+            size = z4
+            addr = z64
+            wdata = z64
+
         # CMP.LTU: unsigned compare against modified SrcR.
         cmp_ltu = z64
         if srcl_val.ult(srcr_addsub_nosh):
@@ -612,9 +1005,21 @@ def build_ex_stage(
             addr = z64
             wdata = z64
 
-        # SETC.GEUI / C.SETC.NE: update commit_cond (committed in WB).
-        setc_bit = z64
+        # CMP.GEUI: unsigned compare against immediate.
+        cmp_geui = z64
+        if srcl_val.uge(imm):
+            cmp_geui = 1
+        if op_cmp_geui:
+            alu = cmp_geui
+            is_load = z1
+            is_store = z1
+            size = z4
+            addr = z64
+            wdata = z64
+
+        # SETC.*: update commit_cond (committed in WB).
         if op_setc_geui:
+            setc_bit = z64
             uimm = shl_var(m, imm, shamt)
             if srcl_val.uge(uimm):
                 setc_bit = 1
@@ -624,7 +1029,165 @@ def build_ex_stage(
             size = z4
             addr = z64
             wdata = z64
+        if op_setc_eqi:
+            setc_bit = z64
+            simm = shl_var(m, imm, shamt)
+            if srcl_val == simm:
+                setc_bit = 1
+            alu = setc_bit
+            is_load = z1
+            is_store = z1
+            size = z4
+            addr = z64
+            wdata = z64
+        if op_setc_nei:
+            setc_bit = z64
+            simm = shl_var(m, imm, shamt)
+            if srcl_val != simm:
+                setc_bit = 1
+            alu = setc_bit
+            is_load = z1
+            is_store = z1
+            size = z4
+            addr = z64
+            wdata = z64
+        if op_setc_andi:
+            setc_bit = z64
+            simm = shl_var(m, imm, shamt)
+            if (srcl_val & simm) != 0:
+                setc_bit = 1
+            alu = setc_bit
+            is_load = z1
+            is_store = z1
+            size = z4
+            addr = z64
+            wdata = z64
+        if op_setc_ori:
+            setc_bit = z64
+            simm = shl_var(m, imm, shamt)
+            if (srcl_val | simm) != 0:
+                setc_bit = 1
+            alu = setc_bit
+            is_load = z1
+            is_store = z1
+            size = z4
+            addr = z64
+            wdata = z64
+        if op_setc_lti:
+            setc_bit = z64
+            simm = shl_var(m, imm, shamt)
+            if srcl_val.slt(simm):
+                setc_bit = 1
+            alu = setc_bit
+            is_load = z1
+            is_store = z1
+            size = z4
+            addr = z64
+            wdata = z64
+        if op_setc_gei:
+            setc_bit = z64
+            simm = shl_var(m, imm, shamt)
+            if ~srcl_val.slt(simm):
+                setc_bit = 1
+            alu = setc_bit
+            is_load = z1
+            is_store = z1
+            size = z4
+            addr = z64
+            wdata = z64
+        if op_setc_ltui:
+            setc_bit = z64
+            uimm = shl_var(m, imm, shamt)
+            if srcl_val.ult(uimm):
+                setc_bit = 1
+            alu = setc_bit
+            is_load = z1
+            is_store = z1
+            size = z4
+            addr = z64
+            wdata = z64
+        if op_setc_eq:
+            setc_bit = z64
+            if srcl_val == srcr_addsub_nosh:
+                setc_bit = 1
+            alu = setc_bit
+            is_load = z1
+            is_store = z1
+            size = z4
+            addr = z64
+            wdata = z64
+        if op_setc_ne:
+            setc_bit = z64
+            if srcl_val != srcr_addsub_nosh:
+                setc_bit = 1
+            alu = setc_bit
+            is_load = z1
+            is_store = z1
+            size = z4
+            addr = z64
+            wdata = z64
+        if op_setc_and:
+            setc_bit = z64
+            if (srcl_val & srcr_logic) != 0:
+                setc_bit = 1
+            alu = setc_bit
+            is_load = z1
+            is_store = z1
+            size = z4
+            addr = z64
+            wdata = z64
+        if op_setc_or:
+            setc_bit = z64
+            if (srcl_val | srcr_logic) != 0:
+                setc_bit = 1
+            alu = setc_bit
+            is_load = z1
+            is_store = z1
+            size = z4
+            addr = z64
+            wdata = z64
+        if op_setc_lt:
+            setc_bit = z64
+            if srcl_val.slt(srcr_addsub_nosh):
+                setc_bit = 1
+            alu = setc_bit
+            is_load = z1
+            is_store = z1
+            size = z4
+            addr = z64
+            wdata = z64
+        if op_setc_ltu:
+            setc_bit = z64
+            if srcl_val.ult(srcr_addsub_nosh):
+                setc_bit = 1
+            alu = setc_bit
+            is_load = z1
+            is_store = z1
+            size = z4
+            addr = z64
+            wdata = z64
+        if op_setc_ge:
+            setc_bit = z64
+            if ~srcl_val.slt(srcr_addsub_nosh):
+                setc_bit = 1
+            alu = setc_bit
+            is_load = z1
+            is_store = z1
+            size = z4
+            addr = z64
+            wdata = z64
+        if op_setc_geu:
+            setc_bit = z64
+            if srcl_val.uge(srcr_addsub_nosh):
+                setc_bit = 1
+            alu = setc_bit
+            is_load = z1
+            is_store = z1
+            size = z4
+            addr = z64
+            wdata = z64
         if op_c_setc_ne:
+            setc_bit = z64
             if srcl_val != srcr_val:
                 setc_bit = 1
             alu = setc_bit
@@ -667,8 +1230,17 @@ def build_ex_stage(
             addr = lwi_addr
             wdata = z64
 
-        # LBUI: load unsigned byte.
-        if op_lbui:
+        # LWUI: load unsigned word, address = srcl + (imm << 2)
+        if op_lwui:
+            alu = z64
+            is_load = 1
+            is_store = z1
+            size = 4
+            addr = lwi_addr
+            wdata = z64
+
+        # LBI/LBUI: load (signed/unsigned) byte, address = srcl + simm12.
+        if op_lbi | op_lbui:
             alu = z64
             is_load = 1
             is_store = z1
@@ -676,7 +1248,17 @@ def build_ex_stage(
             addr = srcl_val + imm
             wdata = z64
 
-        # LB/LW: indexed loads.
+        # LHI/LHUI: load (signed/unsigned) halfword, address = srcl + (simm12 << 1).
+        h_off = imm.shl(amount=1)
+        if op_lhi | op_lhui:
+            alu = z64
+            is_load = 1
+            is_store = z1
+            size = 2
+            addr = srcl_val + h_off
+            wdata = z64
+
+        # LB/LBU/LH/LHU/LW/LWU/LD: indexed loads.
         idx_addr = srcl_val + idx_mod_shl
         if op_lb:
             alu = z64
@@ -685,11 +1267,46 @@ def build_ex_stage(
             size = 1
             addr = idx_addr
             wdata = z64
+        if op_lbu:
+            alu = z64
+            is_load = 1
+            is_store = z1
+            size = 1
+            addr = idx_addr
+            wdata = z64
+        if op_lh:
+            alu = z64
+            is_load = 1
+            is_store = z1
+            size = 2
+            addr = idx_addr
+            wdata = z64
+        if op_lhu:
+            alu = z64
+            is_load = 1
+            is_store = z1
+            size = 2
+            addr = idx_addr
+            wdata = z64
         if op_lw:
             alu = z64
             is_load = 1
             is_store = z1
             size = 4
+            addr = idx_addr
+            wdata = z64
+        if op_lwu:
+            alu = z64
+            is_load = 1
+            is_store = z1
+            size = 4
+            addr = idx_addr
+            wdata = z64
+        if op_ld:
+            alu = z64
+            is_load = 1
+            is_store = z1
+            size = 8
             addr = idx_addr
             wdata = z64
 
@@ -702,6 +1319,24 @@ def build_ex_stage(
             size = 8
             addr = srcl_val + ldi_off
             wdata = z64
+
+        # SBI: store byte (1 byte), addr = SrcR + simm12.
+        if op_sbi:
+            alu = z64
+            is_load = z1
+            is_store = 1
+            size = 1
+            addr = srcr_val + imm
+            wdata = srcl_val
+
+        # SHI: store halfword (2 bytes), addr = SrcR + (simm12 << 1).
+        if op_shi:
+            alu = z64
+            is_load = z1
+            is_store = 1
+            size = 2
+            addr = srcr_val + h_off
+            wdata = srcl_val
 
         # SWI / C.SWI: store word (4 bytes)
         store_addr = srcl_val + off
@@ -716,6 +1351,36 @@ def build_ex_stage(
             size = 4
             addr = store_addr
             wdata = store_data
+
+        # SB/SH/SW/SD: indexed stores (addr = SrcL + (idx_mod << shamt)).
+        if op_sb:
+            alu = z64
+            is_load = z1
+            is_store = 1
+            size = 1
+            addr = idx_addr
+            wdata = srcp_val
+        if op_sh:
+            alu = z64
+            is_load = z1
+            is_store = 1
+            size = 2
+            addr = idx_addr
+            wdata = srcp_val
+        if op_sw:
+            alu = z64
+            is_load = z1
+            is_store = 1
+            size = 4
+            addr = idx_addr
+            wdata = srcp_val
+        if op_sd:
+            alu = z64
+            is_load = z1
+            is_store = 1
+            size = 8
+            addr = idx_addr
+            wdata = srcp_val
 
         sdi_off = imm.shl(amount=3)
 
@@ -798,7 +1463,7 @@ def build_ex_stage(
             addr = pc + imm
             wdata = srcl_val
 
-        # C.ADDI / C.ADD / C.OR: push to T-hand.
+        # C.ADDI / C.ADD / C.SUB / C.AND / C.OR: push to T-hand.
         if op_c_addi:
             alu = srcl_val + imm
             is_load = z1
@@ -808,6 +1473,20 @@ def build_ex_stage(
             wdata = z64
         if op_c_add:
             alu = srcl_val + srcr_val
+            is_load = z1
+            is_store = z1
+            size = z4
+            addr = z64
+            wdata = z64
+        if op_c_sub:
+            alu = srcl_val - srcr_val
+            is_load = z1
+            is_store = z1
+            size = z4
+            addr = z64
+            wdata = z64
+        if op_c_and:
+            alu = srcl_val & srcr_val
             is_load = z1
             is_store = z1
             size = z4

@@ -353,6 +353,11 @@ def main() -> int:
     ap.add_argument("--page-align", default="0x1000", help="Alignment for section placement when ET_REL (hex)")
     ap.add_argument("--start-symbol", default="_start", help="Symbol to use as boot PC when emitting metadata (default: _start)")
     ap.add_argument("--print-start", action="store_true", help="Print resolved start PC (hex) to stdout")
+    ap.add_argument(
+        "--print-max",
+        action="store_true",
+        help="Print required max address (exclusive, hex) to stdout (after any --print-start line)",
+    )
     ns = ap.parse_args()
 
     path = Path(ns.elf)
@@ -434,6 +439,10 @@ def main() -> int:
 
     segments.sort(key=lambda x: x[0])
 
+    max_end = 0
+    for addr, blob in segments:
+        max_end = max(max_end, int(addr) + len(blob))
+
     out_lines: list[str] = []
     for addr, blob in segments:
         if not blob:
@@ -467,6 +476,9 @@ def main() -> int:
             raise SystemExit(f"error: start symbol {start_sym!r} not found")
 
         print(f"0x{start_pc:x}")
+
+    if ns.print_max:
+        print(f"0x{max_end:x}")
     return 0
 
 

@@ -17,7 +17,8 @@ using pyc::cpp::Wire;
 namespace {
 
 constexpr std::uint64_t kBootPc = 0x0000'0000'0001'0000ull;
-constexpr std::uint64_t kBootSp = 0x0000'0000'0002'0000ull;
+// Keep the default SP away from the default .data placement (elf_to_memh.py uses 0x20000).
+constexpr std::uint64_t kBootSp = 0x0000'0000'000f'ff00ull;
 
 template <unsigned AddrWidth, unsigned DataWidth, std::size_t DepthBytes>
 static bool loadMemh(pyc::cpp::pyc_byte_mem<AddrWidth, DataWidth, DepthBytes> &mem, const std::string &path) {
@@ -52,7 +53,11 @@ static bool runProgram(const char *name, const char *memhPath, std::uint64_t boo
     return false;
 
   dut.boot_pc = Wire<64>(bootPc);
-  dut.boot_sp = Wire<64>(kBootSp);
+  std::uint64_t bootSp = kBootSp;
+  if (const char *env = std::getenv("PYC_BOOT_SP")) {
+    bootSp = static_cast<std::uint64_t>(std::stoull(env, nullptr, 0));
+  }
+  dut.boot_sp = Wire<64>(bootSp);
   dut.irq = Wire<1>(0);
   dut.irq_vector = Wire<64>(0);
 
@@ -87,6 +92,12 @@ static bool runProgram(const char *name, const char *memhPath, std::uint64_t boo
       tb.vcdTrace(dut.stage, "stage");
       tb.vcdTrace(dut.cycles, "cycles");
       tb.vcdTrace(dut.if_window, "if_window");
+      tb.vcdTrace(dut.wb0_valid, "wb0_valid");
+      tb.vcdTrace(dut.wb1_valid, "wb1_valid");
+      tb.vcdTrace(dut.wb0_pc, "wb0_pc");
+      tb.vcdTrace(dut.wb1_pc, "wb1_pc");
+      tb.vcdTrace(dut.wb0_op, "wb0_op");
+      tb.vcdTrace(dut.wb1_op, "wb1_op");
       tb.vcdTrace(dut.wb_op, "wb_op");
       tb.vcdTrace(dut.wb_regdst, "wb_regdst");
       tb.vcdTrace(dut.wb_value, "wb_value");
@@ -103,8 +114,12 @@ static bool runProgram(const char *name, const char *memhPath, std::uint64_t boo
   tb.reset(dut.rst, /*cyclesAsserted=*/2, /*cyclesDeasserted=*/1);
 
   std::uint64_t insnCount = 0;
+  std::uint64_t maxCycles = 200000;
+  if (const char *env = std::getenv("PYC_MAX_CYCLES")) {
+    maxCycles = static_cast<std::uint64_t>(std::stoull(env, nullptr, 0));
+  }
 
-  for (std::uint64_t i = 0; i < 200000; i++) {
+  for (std::uint64_t i = 0; i < maxCycles; i++) {
     if (dut.uart_valid.toBool()) {
       const char c = static_cast<char>(dut.uart_byte.value() & 0xFFu);
       if (trace_log) {
@@ -127,7 +142,19 @@ static bool runProgram(const char *name, const char *memhPath, std::uint64_t boo
       break;
   }
   if (!dut.halted.toBool()) {
-    std::cerr << "FAIL " << name << ": did not halt (pc=0x" << std::hex << dut.pc.value() << ")\n";
+    std::cerr << "FAIL " << name << ": did not halt after " << std::dec << maxCycles << " cycles (pc=0x" << std::hex
+              << dut.pc.value() << ")\n";
+    return false;
+  }
+
+  const bool haltedInvalid =
+      (dut.wb0_valid.toBool() && dut.wb0_op.value() == 0) || (dut.wb1_valid.toBool() && dut.wb1_op.value() == 0);
+  if (haltedInvalid) {
+    std::cerr << "FAIL " << name << ": halted due to OP_INVALID"
+              << " (wb0: valid=" << dut.wb0_valid.toBool() << " pc=0x" << std::hex << dut.wb0_pc.value()
+              << " op=" << std::dec << dut.wb0_op.value() << ", wb1: valid=" << dut.wb1_valid.toBool()
+              << " pc=0x" << std::hex << dut.wb1_pc.value() << " op=" << std::dec << dut.wb1_op.value()
+              << ")\n";
     return false;
   }
 

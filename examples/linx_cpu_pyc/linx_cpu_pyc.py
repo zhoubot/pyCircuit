@@ -40,12 +40,42 @@ from examples.linx_cpu_pyc.isa import (
     OP_HL_SW_PCR,
     OP_INVALID,
     OP_LB,
+    OP_LBI,
+    OP_LBU,
     OP_LBUI,
+    OP_LD,
     OP_LDI,
+    OP_LH,
+    OP_LHI,
+    OP_LHU,
+    OP_LHUI,
     OP_LW,
     OP_LWI,
+    OP_LWU,
+    OP_LWUI,
+    OP_SB,
+    OP_SBI,
+    OP_SD,
     OP_SDI,
+    OP_SH,
+    OP_SHI,
+    OP_SETC_AND,
+    OP_SETC_ANDI,
+    OP_SETC_EQ,
+    OP_SETC_EQI,
+    OP_SETC_GE,
+    OP_SETC_GEI,
+    OP_SETC_GEU,
     OP_SETC_GEUI,
+    OP_SETC_LT,
+    OP_SETC_LTI,
+    OP_SETC_LTU,
+    OP_SETC_LTUI,
+    OP_SETC_NE,
+    OP_SETC_NEI,
+    OP_SETC_OR,
+    OP_SETC_ORI,
+    OP_SW,
     OP_SWI,
     REG_INVALID,
     ST_IF,
@@ -285,7 +315,9 @@ def build(
     wb0_store_size = pipe_memwb0.size.out()
     wb0_store_data = pipe_memwb0.wdata.out()
 
-    mmio_uart_wr0 = wb0_store_valid & (wb0_store_addr == mmio_uart) & (wb0_store_size == 4)
+    # LinxISA libc uses byte stores for UART (`__linx_putchar`), but keep
+    # compatibility with older word-store bring-up tests.
+    mmio_uart_wr0 = wb0_store_valid & (wb0_store_addr == mmio_uart) & ((wb0_store_size == 1) | (wb0_store_size == 4))
     mmio_exit_wr0 = wb0_store_valid & (wb0_store_addr == mmio_exit) & (wb0_store_size == 4)
 
     # Lane0 do_wb is suppressed when the retiring op halts the core.
@@ -317,7 +349,7 @@ def build(
     wb1_store_size = pipe_memwb1.size.out()
     wb1_store_data = pipe_memwb1.wdata.out()
 
-    mmio_uart_wr1 = wb1_store_valid & (wb1_store_addr == mmio_uart) & (wb1_store_size == 4)
+    mmio_uart_wr1 = wb1_store_valid & (wb1_store_addr == mmio_uart) & ((wb1_store_size == 1) | (wb1_store_size == 4))
     mmio_exit_wr1 = wb1_store_valid & (wb1_store_addr == mmio_exit) & (wb1_store_size == 4)
 
     wb1_halt = (wb1_retire & ((pipe_memwb1.op == OP_EBREAK) | (pipe_memwb1.op == OP_INVALID))) | mmio_exit_wr1
@@ -657,10 +689,25 @@ def build(
         | (op1 == OP_LWI)
         | (op1 == OP_SWI)
         | (op1 == OP_SDI)
+        | (op1 == OP_SBI)
+        | (op1 == OP_SHI)
+        | (op1 == OP_SB)
+        | (op1 == OP_SH)
+        | (op1 == OP_SW)
+        | (op1 == OP_SD)
         | (op1 == OP_LBUI)
+        | (op1 == OP_LBI)
         | (op1 == OP_LB)
+        | (op1 == OP_LBU)
+        | (op1 == OP_LH)
+        | (op1 == OP_LHU)
         | (op1 == OP_LW)
+        | (op1 == OP_LWU)
         | (op1 == OP_LDI)
+        | (op1 == OP_LHI)
+        | (op1 == OP_LHUI)
+        | (op1 == OP_LWUI)
+        | (op1 == OP_LD)
         | (op1 == OP_HL_LB_PCR)
         | (op1 == OP_HL_LBU_PCR)
         | (op1 == OP_HL_LH_PCR)
@@ -673,7 +720,27 @@ def build(
         | (op1 == OP_HL_SW_PCR)
         | (op1 == OP_HL_SD_PCR)
     )
-    is_ctrl1 = (op1 == OP_C_SETC_EQ) | (op1 == OP_C_SETC_NE) | (op1 == OP_C_SETC_TGT) | (op1 == OP_SETC_GEUI)
+    is_ctrl1 = (
+        (op1 == OP_C_SETC_EQ)
+        | (op1 == OP_C_SETC_NE)
+        | (op1 == OP_C_SETC_TGT)
+        | (op1 == OP_SETC_GEUI)
+        | (op1 == OP_SETC_EQ)
+        | (op1 == OP_SETC_NE)
+        | (op1 == OP_SETC_AND)
+        | (op1 == OP_SETC_OR)
+        | (op1 == OP_SETC_LT)
+        | (op1 == OP_SETC_LTU)
+        | (op1 == OP_SETC_GE)
+        | (op1 == OP_SETC_GEU)
+        | (op1 == OP_SETC_EQI)
+        | (op1 == OP_SETC_NEI)
+        | (op1 == OP_SETC_ANDI)
+        | (op1 == OP_SETC_ORI)
+        | (op1 == OP_SETC_LTI)
+        | (op1 == OP_SETC_GEI)
+        | (op1 == OP_SETC_LTUI)
+    )
     is_halt1 = (op1 == OP_EBREAK) | (op1 == OP_INVALID)
 
     # Slot1 restriction: GPR-only, no memory/control/boundary/macro.
@@ -1030,6 +1097,12 @@ def build(
     m.output("sp", rf.gpr[1])
     m.output("br_kind", state.br_kind)
     # Debug/trace hooks (stable, optional consumers).
+    m.output("wb0_valid", pipe_memwb0.valid)
+    m.output("wb1_valid", pipe_memwb1.valid)
+    m.output("wb0_pc", pipe_memwb0.pc)
+    m.output("wb1_pc", pipe_memwb1.pc)
+    m.output("wb0_op", pipe_memwb0.op)
+    m.output("wb1_op", pipe_memwb1.op)
     wb_window = pipe_memwb0.window.out()
     wb_op_out = pipe_memwb0.op.out()
     wb_regdst_out = pipe_memwb0.regdst.out()
