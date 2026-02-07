@@ -1,8 +1,11 @@
 from __future__ import annotations
 
-from pycircuit import Circuit
+from dataclasses import dataclass
 
-from ..decode import decode_bundle_8B
+from pycircuit import Circuit
+from pycircuit.dsl import Signal
+
+from ..iex.iex_alu import exec_uop
 from ..isa import (
     BK_CALL,
     BK_COND,
@@ -24,13 +27,26 @@ from ..isa import (
     REG_INVALID,
 )
 from ..util import make_consts
-from .exec import exec_uop
+from .dec1 import decode_f4_bundle
 from .helpers import alloc_from_free_mask, mask_bit, mux_by_uindex, onehot_from_tag
 from .params import OooParams
 from .state import make_core_ctrl_regs, make_ifu_regs, make_iq_regs, make_prf, make_rename_regs, make_rob_regs
 
 
-def build_bcc_ooo(m: Circuit, *, mem_bytes: int, params: OooParams | None = None) -> None:
+@dataclass(frozen=True)
+class BccOooExports:
+    clk: Signal
+    rst: Signal
+    block_cmd_valid: Signal
+    block_cmd_kind: Signal
+    block_cmd_payload: Signal
+    block_cmd_tile: Signal
+    block_cmd_tag: Signal
+    cycles: Signal
+    halted: Signal
+
+
+def build_bcc_ooo(m: Circuit, *, mem_bytes: int, params: OooParams | None = None) -> BccOooExports:
     p = params or OooParams()
 
     clk = m.clock("clk")
@@ -45,7 +61,7 @@ def build_bcc_ooo(m: Circuit, *, mem_bytes: int, params: OooParams | None = None
     def op_is(op, *codes: int):
         v = consts.zero1
         for code in codes:
-            v = v | op.eq(c(code, width=6))
+            v = v | op.eq(c(code, width=12))
         return v
 
     tag0 = c(0, width=p.ptag_w)
@@ -92,7 +108,7 @@ def build_bcc_ooo(m: Circuit, *, mem_bytes: int, params: OooParams | None = None
         commit_idxs.append(idx)
         rob_valids.append(mux_by_uindex(m, idx=idx, items=rob.valid, default=consts.zero1))
         rob_dones.append(mux_by_uindex(m, idx=idx, items=rob.done, default=consts.zero1))
-        rob_ops.append(mux_by_uindex(m, idx=idx, items=rob.op, default=c(0, width=6)))
+        rob_ops.append(mux_by_uindex(m, idx=idx, items=rob.op, default=c(0, width=12)))
         rob_lens.append(mux_by_uindex(m, idx=idx, items=rob.len_bytes, default=consts.zero3))
         rob_dst_kinds.append(mux_by_uindex(m, idx=idx, items=rob.dst_kind, default=c(0, width=2)))
         rob_dst_aregs.append(mux_by_uindex(m, idx=idx, items=rob.dst_areg, default=c(REG_INVALID, width=6)))
@@ -271,8 +287,8 @@ def build_bcc_ooo(m: Circuit, *, mem_bytes: int, params: OooParams | None = None
         ready = v & sl_rdy & sr_rdy & sp_rdy
 
         op_i = iq_lsu.op[i].out()
-        is_load_i = op_i.eq(c(OP_LWI, width=6)) | op_i.eq(c(OP_C_LWI, width=6))
-        is_store_i = op_i.eq(c(OP_SWI, width=6)) | op_i.eq(c(OP_C_SWI, width=6)) | op_i.eq(c(OP_SDI, width=6))
+        is_load_i = op_i.eq(c(OP_LWI, width=12)) | op_i.eq(c(OP_C_LWI, width=12))
+        is_store_i = op_i.eq(c(OP_SWI, width=12)) | op_i.eq(c(OP_C_SWI, width=12)) | op_i.eq(c(OP_SDI, width=12))
 
         uop_rob_i = iq_lsu.rob[i].out()
         uop_dist = uop_rob_i + sub_head  # (uop_rob - head) mod 2^ROB_W
@@ -368,7 +384,7 @@ def build_bcc_ooo(m: Circuit, *, mem_bytes: int, params: OooParams | None = None
         iq = issue_iqs[slot]
         idx = issue_idxs[slot]
         uop_robs.append(mux_by_uindex(m, idx=idx, items=iq.rob, default=c(0, width=p.rob_w)))
-        uop_ops.append(mux_by_uindex(m, idx=idx, items=iq.op, default=c(0, width=6)))
+        uop_ops.append(mux_by_uindex(m, idx=idx, items=iq.op, default=c(0, width=12)))
         uop_pcs.append(mux_by_uindex(m, idx=idx, items=iq.pc, default=consts.zero64))
         uop_imms.append(mux_by_uindex(m, idx=idx, items=iq.imm, default=consts.zero64))
         uop_sls.append(mux_by_uindex(m, idx=idx, items=iq.srcl, default=tag0))
@@ -480,7 +496,7 @@ def build_bcc_ooo(m: Circuit, *, mem_bytes: int, params: OooParams | None = None
     f4_pc = ifu.f4_pc.out()
     f4_window = ifu.f4_window.out()
 
-    f4_bundle = decode_bundle_8B(m, f4_window)
+    f4_bundle = decode_f4_bundle(m, f4_window)
 
     disp_valids = []
     disp_pcs = []
@@ -513,10 +529,10 @@ def build_bcc_ooo(m: Circuit, *, mem_bytes: int, params: OooParams | None = None
         srcp = dec.srcp
         imm = dec.imm
 
-        is_start = op.eq(c(OP_C_BSTART_STD, width=6)) | op.eq(c(OP_C_BSTART_COND, width=6)) | op.eq(c(OP_BSTART_STD_CALL, width=6))
-        push_t = regdst.eq(c(31, width=6)) | op.eq(c(OP_C_LWI, width=6))
+        is_start = op.eq(c(OP_C_BSTART_STD, width=12)) | op.eq(c(OP_C_BSTART_COND, width=12)) | op.eq(c(OP_BSTART_STD_CALL, width=12))
+        push_t = regdst.eq(c(31, width=6)) | op.eq(c(OP_C_LWI, width=12))
         push_u = regdst.eq(c(30, width=6))
-        is_store = op.eq(c(OP_SWI, width=6)) | op.eq(c(OP_C_SWI, width=6)) | op.eq(c(OP_SDI, width=6))
+        is_store = op.eq(c(OP_SWI, width=12)) | op.eq(c(OP_C_SWI, width=12)) | op.eq(c(OP_SDI, width=12))
 
         dst_is_invalid = regdst.eq(c(REG_INVALID, width=6))
         dst_is_zero = regdst.eq(c(0, width=6))
@@ -564,16 +580,16 @@ def build_bcc_ooo(m: Circuit, *, mem_bytes: int, params: OooParams | None = None
     disp_to_lsu = []
     for slot in range(p.dispatch_w):
         op = disp_ops[slot]
-        is_load = op.eq(c(OP_LWI, width=6)) | op.eq(c(OP_C_LWI, width=6))
+        is_load = op.eq(c(OP_LWI, width=12)) | op.eq(c(OP_C_LWI, width=12))
         is_store = disp_is_store[slot]
         is_mem = is_load | is_store
         is_bru = (
-            op.eq(c(OP_C_BSTART_STD, width=6))
-            | op.eq(c(OP_C_BSTART_COND, width=6))
-            | op.eq(c(OP_C_BSTOP, width=6))
-            | op.eq(c(OP_BSTART_STD_CALL, width=6))
-            | op.eq(c(OP_C_SETC_EQ, width=6))
-            | op.eq(c(OP_C_SETC_TGT, width=6))
+            op.eq(c(OP_C_BSTART_STD, width=12))
+            | op.eq(c(OP_C_BSTART_COND, width=12))
+            | op.eq(c(OP_C_BSTOP, width=12))
+            | op.eq(c(OP_BSTART_STD_CALL, width=12))
+            | op.eq(c(OP_C_SETC_EQ, width=12))
+            | op.eq(c(OP_C_SETC_TGT, width=12))
         )
         to_lsu = is_mem
         to_bru = (~to_lsu) & is_bru
@@ -688,7 +704,7 @@ def build_bcc_ooo(m: Circuit, *, mem_bytes: int, params: OooParams | None = None
     #
     # Fetch when the memory read port is available and the queue is empty (or
     # being consumed by dispatch in the same cycle).
-    fetch_bundle = decode_bundle_8B(m, mem_rdata)
+    fetch_bundle = decode_f4_bundle(m, mem_rdata)
     fetch_len = fetch_bundle.total_len_bytes
     fetch_advance = fetch_bundle.total_len_bytes.zext(width=64)
     fetch_fire = can_run & (~commit_redirect) & (~any_load_fire) & ((~f4_valid) | dispatch_fire)
@@ -995,7 +1011,7 @@ def build_bcc_ooo(m: Circuit, *, mem_bytes: int, params: OooParams | None = None
         areg = rob_dst_aregs[slot]
         pdst = rob_pdsts[slot]
 
-        is_start_marker = op.eq(c(OP_C_BSTART_STD, width=6)) | op.eq(c(OP_C_BSTART_COND, width=6)) | op.eq(c(OP_BSTART_STD_CALL, width=6))
+        is_start_marker = op.eq(c(OP_C_BSTART_STD, width=12)) | op.eq(c(OP_C_BSTART_COND, width=12)) | op.eq(c(OP_BSTART_STD_CALL, width=12))
 
         # Snapshot old hand regs (from the pre-update state for this slot).
         old_t0 = cmap_live[24]
@@ -1077,7 +1093,7 @@ def build_bcc_ooo(m: Circuit, *, mem_bytes: int, params: OooParams | None = None
     halt_set = consts.zero1
     for slot in range(p.commit_w):
         op = rob_ops[slot]
-        is_halt = op.eq(c(OP_EBREAK, width=6)) | op.eq(c(OP_INVALID, width=6))
+        is_halt = op.eq(c(OP_EBREAK, width=12)) | op.eq(c(OP_INVALID, width=12))
         halt_set = halt_set | (commit_fires[slot] & is_halt)
     state.halted.set(consts.one1, when=halt_set)
 
@@ -1139,3 +1155,31 @@ def build_bcc_ooo(m: Circuit, *, mem_bytes: int, params: OooParams | None = None
     m.output("mem_raddr", mem_raddr)
     m.output("dispatch_fire", dispatch_fire)
     m.output("dec_op", dec_op)
+
+    # Block command export for Janus BCtrl/TMU/PE top-level bring-up.
+    block_cmd_valid = commit_fire & op_is(head_op, OP_C_BSTART_STD, OP_C_BSTART_COND, OP_BSTART_STD_CALL)
+    block_cmd_kind = head_op.eq(c(OP_C_BSTART_COND, width=6)).select(c(1, width=2), c(0, width=2))
+    block_cmd_kind = head_op.eq(c(OP_BSTART_STD_CALL, width=6)).select(c(2, width=2), block_cmd_kind)
+    block_cmd_payload = head_value
+    block_cmd_tile = head_value.trunc(width=6)
+    block_cmd_tag = state.cycles.out().trunc(width=8)
+
+    ooo_4wide = c(1 if (p.fetch_w == 4 and p.dispatch_w == 4 and p.issue_w == 4 and p.commit_w == 4) else 0, width=1)
+    m.output("ooo_4wide", ooo_4wide)
+    m.output("block_cmd_valid", block_cmd_valid)
+    m.output("block_cmd_kind", block_cmd_kind)
+    m.output("block_cmd_payload", block_cmd_payload)
+    m.output("block_cmd_tile", block_cmd_tile)
+    m.output("block_cmd_tag", block_cmd_tag)
+
+    return BccOooExports(
+        clk=clk,
+        rst=rst,
+        block_cmd_valid=block_cmd_valid.sig,
+        block_cmd_kind=block_cmd_kind.sig,
+        block_cmd_payload=block_cmd_payload.sig,
+        block_cmd_tile=block_cmd_tile.sig,
+        block_cmd_tag=block_cmd_tag.sig,
+        cycles=state.cycles.out().sig,
+        halted=state.halted.out().sig,
+    )

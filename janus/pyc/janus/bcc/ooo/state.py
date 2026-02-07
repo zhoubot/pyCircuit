@@ -174,7 +174,7 @@ def make_rob_regs(m: Circuit, clk: Signal, rst: Signal, *, consts: Consts, p: Oo
         for i in range(p.rob_depth):
             valid.append(m.out(f"v{i}", clk=clk, rst=rst, width=1, init=consts.zero1, en=consts.one1))
             done.append(m.out(f"done{i}", clk=clk, rst=rst, width=1, init=consts.zero1, en=consts.one1))
-            op.append(m.out(f"op{i}", clk=clk, rst=rst, width=6, init=c(0, width=6), en=consts.one1))
+            op.append(m.out(f"op{i}", clk=clk, rst=rst, width=12, init=c(0, width=12), en=consts.one1))
             len_bytes.append(m.out(f"len{i}", clk=clk, rst=rst, width=3, init=consts.zero3, en=consts.one1))
             dst_kind.append(m.out(f"dk{i}", clk=clk, rst=rst, width=2, init=c(0, width=2), en=consts.one1))
             dst_areg.append(m.out(f"da{i}", clk=clk, rst=rst, width=6, init=c(0, width=6), en=consts.one1))
@@ -222,7 +222,7 @@ def make_iq_regs(m: Circuit, clk: Signal, rst: Signal, *, consts: Consts, p: Ooo
         for i in range(p.iq_depth):
             valid.append(m.out(f"v{i}", clk=clk, rst=rst, width=1, init=consts.zero1, en=consts.one1))
             rob.append(m.out(f"rob{i}", clk=clk, rst=rst, width=p.rob_w, init=c(0, width=p.rob_w), en=consts.one1))
-            op.append(m.out(f"op{i}", clk=clk, rst=rst, width=6, init=c(0, width=6), en=consts.one1))
+            op.append(m.out(f"op{i}", clk=clk, rst=rst, width=12, init=c(0, width=12), en=consts.one1))
             pc.append(m.out(f"pc{i}", clk=clk, rst=rst, width=64, init=consts.zero64, en=consts.one1))
             imm.append(m.out(f"imm{i}", clk=clk, rst=rst, width=64, init=consts.zero64, en=consts.one1))
             srcl.append(m.out(f"sl{i}", clk=clk, rst=rst, width=p.ptag_w, init=tag0, en=consts.one1))

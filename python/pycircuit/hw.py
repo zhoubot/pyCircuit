@@ -21,6 +21,11 @@ class Wire:
     m: Module
     sig: Signal
     signed: bool = False
+    # True if this Wire originates from `pyc.wire` and is intended to be driven
+    # by `pyc.assign` (SSA backedge placeholder). JIT debug aliasing must not
+    # wrap such wires in `pyc.alias`, because `pyc.assign` destinations must be
+    # defined by `pyc.wire`.
+    assignable: bool = False
 
     def __post_init__(self) -> None:
         _int_width(self.sig.ty)
@@ -490,10 +495,10 @@ class Circuit(Module):
         return Wire(self, super().const(int(value), width=width), signed=(int(value) < 0))
 
     def new_wire(self, *, width: int) -> Wire:
-        return Wire(self, super().new_wire(width=width))
+        return Wire(self, super().new_wire(width=width), assignable=True)
 
     def named_wire(self, name: str, *, width: int) -> Wire:
-        return Wire(self, super().new_wire(width=width, name=self.scoped_name(name)))
+        return Wire(self, super().new_wire(width=width, name=self.scoped_name(name)), assignable=True)
 
     def wire(self, sig: Signal) -> Wire:
         return Wire(self, sig)
@@ -571,7 +576,7 @@ class Circuit(Module):
             full = f"{stage}__{full}"
         full = self.scoped_name(full)
 
-        next_w = Wire(self, super().new_wire(width=width, name=f"{full}__next"))
+        next_w = Wire(self, super().new_wire(width=width, name=f"{full}__next"), assignable=True)
         if isinstance(en, int):
             en_w: Union[Wire, Signal] = self.const(int(en), width=1)
         else:

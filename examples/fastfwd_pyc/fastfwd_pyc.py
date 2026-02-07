@@ -392,11 +392,15 @@ def _build_fastfwd(
                 We insert into stage (1+lat) *after* the posedge shift, so the
                 collision check must look at stage (2+lat) in the current state.
                 """
+                # Be robust to FE implementations that may *stall* their output:
+                # if we believe stage0 is occupied but FEOUT doesn't assert vld,
+                # freeze this engine and block new dispatches until it drains.
+                stall = pipes[e].valid[0].out() & ~fwded_vld[e]
                 busy = lat.eq(0).select(pipes[e].valid[2].out(), c0)
                 busy = lat.eq(1).select(pipes[e].valid[3].out(), busy)
                 busy = lat.eq(2).select(pipes[e].valid[4].out(), busy)
                 busy = lat.eq(3).select(c0, busy)  # stage5 doesn't exist => always free
-                return ~busy
+                return ~stall & ~busy
 
             # ---- queue head candidate ----
             qv = issue_q[lane].out_valid
@@ -627,7 +631,10 @@ def _build_fastfwd(
             do_buf = comp_now_v[e] & ~direct_take_eng[e]
             comp_q[e].push(comp_now_bus[e], when=do_buf)
 
-            fire = dispatch_fire_eng[e]
+            # If FE stalls output, hold our internal pipe-tracking state so the
+            # seq tag stays aligned with the eventual FEOUT beat.
+            stall = pipes[e].valid[0].out() & ~fwded_vld[e]
+            fire = dispatch_fire_eng[e] & ~stall
             lat = fwd_lat[e]
             seq_in = dispatch_seq_eng[e]
 
@@ -651,8 +658,10 @@ def _build_fastfwd(
                 else:
                     do_set = c0
 
-                pipes[e].valid[i].set(do_set.select(c1, v_next))
-                pipes[e].seq[i].set(do_set.select(seq_in, s_next))
+                v_new = do_set.select(c1, v_next)
+                s_new = do_set.select(seq_in, s_next)
+                pipes[e].valid[i].set(stall.select(pipes[e].valid[i].out(), v_new))
+                pipes[e].seq[i].set(stall.select(pipes[e].seq[i].out(), s_new))
 
     # ---- commit (ROB -> PKTOUT) + history ----
     with m.scope("COMMIT"):

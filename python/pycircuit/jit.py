@@ -211,6 +211,11 @@ class _Compiler:
     def _alias_if_wire(self, v: Any, *, base_name: str, node: ast.AST) -> Any:
         n = self._scoped_name(self._name_with_loc(base_name, node))
         if isinstance(v, Wire):
+            # `pyc.assign` destinations must be defined by `pyc.wire`. The JIT
+            # compiler normally wraps assigned values in `pyc.alias` for stable
+            # naming, but that would break assignable/backedge wires.
+            if getattr(v, "assignable", False):
+                return v
             return Wire(self.m, self.m.alias(v.sig, name=n), signed=v.signed)
         if isinstance(v, Reg):
             q_named = Wire(self.m, self.m.alias(v.q.sig, name=n), signed=v.q.signed)
