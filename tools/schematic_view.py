@@ -490,9 +490,39 @@ _COLORS = {
     "output": ("#FFF3E0", "#E65100"),   # light orange bg, dark orange border
     "reg":    ("#E8F5E9", "#2E7D32"),   # light green bg, dark green border
     "mem":    ("#F3E5F5", "#6A1B9A"),   # light purple bg, dark purple border
-    "mux":    ("#FFF9C4", "#F57F17"),   # light yellow bg, dark yellow border
     "comb":   ("#FAFAFA", "#616161"),   # light gray bg, dark gray border
     "const":  ("#ECEFF1", "#90A4AE"),   # blue gray
+}
+
+# Per-operation color overrides (fill, border)
+_OP_COLORS = {
+    # Arithmetic — blue
+    "add":     ("#BBDEFB", "#1565C0"),
+    "sub":     ("#BBDEFB", "#1565C0"),
+    "mul":     ("#BBDEFB", "#0D47A1"),
+    # Logic gates — teal
+    "and":     ("#B2DFDB", "#00695C"),
+    "or":      ("#B2DFDB", "#00695C"),
+    "xor":     ("#B2DFDB", "#00695C"),
+    "not":     ("#B2DFDB", "#004D40"),
+    # Comparators — pink
+    "eq":      ("#F8BBD0", "#AD1457"),
+    "ne":      ("#F8BBD0", "#AD1457"),
+    "lt":      ("#F8BBD0", "#880E4F"),
+    "gt":      ("#F8BBD0", "#880E4F"),
+    "le":      ("#F8BBD0", "#880E4F"),
+    "ge":      ("#F8BBD0", "#880E4F"),
+    # MUX / select — yellow
+    "mux":     ("#FFF9C4", "#F57F17"),
+    # Bit manipulation — light purple
+    "sext":    ("#E1BEE7", "#7B1FA2"),
+    "zext":    ("#E1BEE7", "#7B1FA2"),
+    "trunc":   ("#E1BEE7", "#7B1FA2"),
+    "extract": ("#E1BEE7", "#7B1FA2"),
+    "shl":     ("#E1BEE7", "#6A1B9A"),
+    "shr":     ("#E1BEE7", "#6A1B9A"),
+    # Wire (passthru that survived collapse) — pale gray
+    "wire":    ("#F5F5F5", "#BDBDBD"),
 }
 
 # Shape map
@@ -503,6 +533,24 @@ _SHAPES = {
     "mem":    "cylinder",
     "comb":   "box",
     "const":  "plain",
+}
+
+# Per-operation shape overrides
+_OP_SHAPES = {
+    "mux":     "diamond",
+    "and":     "invtrapezium",
+    "or":      "invtrapezium",
+    "xor":     "invtrapezium",
+    "not":     "invtriangle",
+    "eq":      "hexagon",
+    "ne":      "hexagon",
+    "lt":      "hexagon",
+    "gt":      "hexagon",
+    "le":      "hexagon",
+    "ge":      "hexagon",
+    "add":     "oval",
+    "sub":     "oval",
+    "mul":     "oval",
 }
 
 
@@ -548,12 +596,17 @@ def render_schematic(
 
     # Add nodes
     for n in nodes.values():
-        fill, border = _COLORS.get(n.kind, _COLORS["comb"])
-        if n.op == "mux":
-            fill, border = _COLORS["mux"]
-        shape = _SHAPES.get(n.kind, "box")
-        if n.op == "mux":
-            shape = "diamond"
+        # Determine color: op-specific > kind-level > default
+        if n.op in _OP_COLORS:
+            fill, border = _OP_COLORS[n.op]
+        else:
+            fill, border = _COLORS.get(n.kind, _COLORS["comb"])
+
+        # Determine shape: op-specific > kind-level > default
+        if n.op in _OP_SHAPES:
+            shape = _OP_SHAPES[n.op]
+        else:
+            shape = _SHAPES.get(n.kind, "box")
 
         dot.node(
             n.name,

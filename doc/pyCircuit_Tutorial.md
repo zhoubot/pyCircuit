@@ -785,8 +785,12 @@ python tools/schematic_view.py examples/generated/counter/counter.v -o counter.s
 | 输出端口 | 倒五边形 | 橙色 |
 | 寄存器（pyc_reg） | 3D 方框 | 绿色 |
 | 内存（pyc_byte_mem） | 圆柱体 | 紫色 |
-| MUX | 菱形 | 黄色 |
-| 组合逻辑 | 方框 | 灰色 |
+| MUX / 选择器 | 菱形 | 黄色 |
+| 算术运算（+、-、*） | 椭圆 | 蓝色 |
+| 逻辑门（&、\|、^、~） | 倒梯形 | 青色 |
+| 比较器（==、!=、<、>） | 六边形 | 粉色 |
+| 位操作（sext、zext、trunc、extract、shift） | 方框 | 浅紫色 |
+| 其他组合逻辑 | 方框 | 灰色 |
 | 反馈边（D→REG） | 虚线 | 红色 |
 
 **工作原理**：
