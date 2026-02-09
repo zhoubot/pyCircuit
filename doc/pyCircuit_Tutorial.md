@@ -30,7 +30,7 @@ pyCircuit 的设计哲学是**统一的信号模型**：不区分组合信号（
 from pycircuit import CycleAwareCircuit, CycleAwareDomain, compile_cycle_aware, mux
 
 def counter(m: CycleAwareCircuit, domain: CycleAwareDomain) -> None:
-    enable = domain.signal("enable", width=1)              # 输入端口（cycle 0）
+    enable = domain.input("enable", width=1)               # 输入端口（cycle 0）
 
     count = domain.signal("count", width=8, reset=0)       # Q 输出（cycle 0）
     next_count = mux(enable, count + 1, count)              # 组合逻辑（cycle 0）
@@ -39,7 +39,7 @@ def counter(m: CycleAwareCircuit, domain: CycleAwareDomain) -> None:
 
     count.set(next_count)                                   # D 输入（cycle 1）
 
-    m.output("count", count.sig)
+    m.output("count", count)
 
 circuit = compile_cycle_aware(counter, name="counter")
 print(circuit.emit_mlir())
@@ -50,7 +50,7 @@ print(circuit.emit_mlir())
 - `count` 的 Q 输出在 cycle 0，读取和组合计算都在 cycle 0
 - `domain.next()` 表示一个时钟周期过去（DFF 的 D→Q 延迟）
 - `count.set(next_count)` 是条件赋值——将 D 输入连接到 flop
-- `enable` 没有 `reset` → 编译器推导为组合信号（输入端口）
+- `enable` 使用 `domain.input()` 定义为外部输入端口
 
 ### 1.2 设计函数签名
 
@@ -150,11 +150,11 @@ accum.set(accum + a)                              # 自引用需要 flop，但�
 
 ```python
 # domain.current_cycle = 0
-a = domain.signal("a", width=8)         # a.cycle = 0
+a = domain.input("a", width=8)          # a.cycle = 0
 
 domain.next()  # 推进到 cycle 1
 
-b = domain.signal("b", width=8)         # b.cycle = 1
+b = domain.input("b", width=8)          # b.cycle = 1
 ```
 
 ### 2.5 自动周期平衡
@@ -198,6 +198,7 @@ c = domain.const(42, width=8)   # c.cycle = 1
 | 方法 | 说明 |
 |------|------|
 | `domain.signal(name, width, reset=None)` | **统一信号定义**（核心 API，见[第 4 节](#4-信号定义)） |
+| `domain.input(name, width)` | 创建输入端口（由外部驱动，不支持 `.set()`） |
 | `domain.const(value, width)` | 创建常量信号（cycle = 当前周期） |
 
 **周期管理**：
@@ -212,13 +213,11 @@ c = domain.const(42, width=8)   # c.cycle = 1
 
 ### 3.2 `CycleAwareCircuit` — 电路构建器（结构性操作）
 
-`m` 负责模块级的结构性操作（端口、连接、复合原语），**不直接创建信号**：
+`m` 负责模块级的结构性操作（端口、复合原语），**不直接创建信号**：
 
 | 方法 | 说明 |
 |------|------|
-| `m.output(name, signal)` | 声明模块输出端口 |
-| `m.named_wire(name, width)` | 创建占位导线（仅用于[反馈信号](#8-反馈信号feedback)） |
-| `m.assign(wire, signal)` | 驱动占位导线 |
+| `m.output(name, signal)` | 声明模块输出端口（直接接受 `CycleAwareSignal`） |
 | `m.cat_signals(*signals)` | 信号拼接（MSB 在前） |
 | `m.ca_byte_mem(name, domain, depth, data_width)` | 创建字节寻址内存 |
 | `m.ca_queue(name, domain, width, depth)` | 创建 FIFO 队列 |
@@ -233,7 +232,6 @@ c = domain.const(42, width=8)   # c.cycle = 1
 |-----------|------|
 | `.cycle` | 信号的逻辑周期标注 |
 | `.width` | 位宽 |
-| `.sig` | 底层原始 `Signal`（用于 `m.output`、`m.assign`） |
 | `.signed` | 是否有符号 |
 | `.name` | 调试名称 |
 | `.set(value, when=cond)` | **条件赋值**（等价于 `if cond: signal = value`） |
@@ -278,9 +276,12 @@ mem.write(waddr, wdata, wstrb, when=write_enable)
 所有信号通过 `domain.signal()` 定义，`reset` 参数决定类型推导：
 
 ```python
-# 组合信号（无 reset）
-enable  = domain.signal("enable",  width=1)           # 输入端口 / wire
-data_in = domain.signal("data_in", width=8)
+# 输入端口（由外部驱动）
+enable  = domain.input("enable",  width=1)
+data_in = domain.input("data_in", width=8)
+
+# 组合信号（无 reset → wire，内部逻辑驱动，用 .set() 赋值）
+alu_result = domain.signal("alu_result", width=64)
 
 # 时序信号（有 reset → 隐含为 D 触发器）
 counter_r  = domain.signal("counter_r",  width=8,  reset=0)
@@ -288,7 +289,7 @@ fetch_pc_r = domain.signal("fetch_pc_r", width=64, reset=0)
 halted_r   = domain.signal("halted_r",   width=1,  reset=0)
 ```
 
-两者的定义语法完全一致，唯一的区别是 `reset` 参数的有无。
+信号类型由 `reset` 参数的有无决定；输入端口使用专用的 `domain.input()`。
 
 ### 4.2 常量
 
@@ -522,7 +523,7 @@ domain.next()                                              # → cycle 1
 count_r.set(count_r + 1, when=enable)                      # D at cycle 1
 
 # 多级：三级流水线
-stage0_in = domain.signal("data_in", width=16)            # cycle 0
+stage0_in = domain.input("data_in", width=16)             # cycle 0
 stage1_r = domain.signal("stage1_r", width=16, reset=0)   # Q at cycle 0
 
 domain.next()  # → cycle 1
@@ -531,7 +532,7 @@ stage2_r = domain.signal("stage2_r", width=16, reset=0)   # Q at cycle 1
 
 domain.next()  # → cycle 2
 stage2_r.set(stage1_r * 2)                                 # D at cycle 2
-m.output("result", stage2_r.sig)
+m.output("result", stage2_r)
 ```
 
 ### 7.2 信号定义与 `.set()` 的分离
@@ -550,7 +551,7 @@ cycle N+1:   .set()（D 端） + 定义下一级信号 + ...
 
 ```python
 def pipeline_design(m, domain):
-    data_in = domain.signal("data_in", width=16)           # cycle 0
+    data_in = domain.input("data_in", width=16)            # cycle 0
 
     # 预定义各级信号
     s1_r = domain.signal("s1_r", width=16, reset=0)        # Q at cycle 0
@@ -567,7 +568,7 @@ def pipeline_design(m, domain):
     domain.next()             # → cycle 2
     s2_r.set(s1_r * 2)       # D at cycle 2
 
-    m.output("out", s2_r.sig)
+    m.output("out", s2_r)
 ```
 
 ### 7.4 Python 循环展开流水线
@@ -576,8 +577,8 @@ JIT 编译时参数配合 Python `for` 循环生成多级流水线（编译期�
 
 ```python
 def build(m: CycleAwareCircuit, domain: CycleAwareDomain, STAGES: int = 3) -> None:
-    a = domain.signal("a", width=16)
-    b = domain.signal("b", width=16)
+    a = domain.input("a", width=16)
+    b = domain.input("b", width=16)
     bus = ca_cat(a, b)
 
     for i in range(STAGES):
@@ -586,7 +587,7 @@ def build(m: CycleAwareCircuit, domain: CycleAwareDomain, STAGES: int = 3) -> No
         stage_r.set(bus)                                                    # D at cycle i+1
         bus = stage_r
 
-    m.output("result", bus.sig)
+    m.output("result", bus)
 
 circuit = compile_cycle_aware(build, name="pipeline", STAGES=5)
 ```
@@ -599,49 +600,55 @@ circuit = compile_cycle_aware(build, name="pipeline", STAGES=5)
 
 在流水线中，后级阶段有时需要向前级发送信号（如 WB 的分支冲刷 → IF，EX 的数据前递 → ID）。按正常平衡规则，cycle 4 的信号在 cycle 0 使用会被插入 4 级 DFF——这对反馈来说是**错误的**。
 
-### 8.2 解决方案：`named_wire` + `CycleAwareSignal`
+### 8.2 解决方案：`domain.signal()` + `.set()`
 
 反馈信号利用平衡规则的第三条：**`signal.cycle >= domain.current_cycle` → 直接使用**。
 
+在统一信号模型下，反馈信号与其他信号使用**完全相同的 API**，关键在于：在**信号产生的 cycle** 定义它（使用 `push()`/`pop()` 临时跳转），然后在后级阶段用 `.set()` 驱动。
+
 步骤：
 
-1. **声明**一个占位导线（`named_wire`）
-2. **包装**为 `CycleAwareSignal`，设置 `.cycle` 为**信号产生的周期**
-3. **使用**：在前级阶段引用——框架看到 `signal.cycle >= current_cycle`，直接使用（不插 DFF）
-4. **驱动**：在后级阶段用 `m.assign()` 将真实值连接到占位导线
+1. **声明**：使用 `domain.signal()` 在信号产生的 cycle 定义（无 `reset` → wire）
+2. **使用**：在前级阶段引用——框架看到 `signal.cycle >= current_cycle`，直接使用（不插 DFF）
+3. **驱动**：在后级阶段用 `.set()` 将真实值赋给该信号
 
 ```python
-# 步骤 1-2：声明反馈信号（由 cycle 4 的 WB 阶段产生）
-_fb_flush_w = m.named_wire("fb_flush", width=1)
-fb_flush = CycleAwareSignal(
-    m=m, sig=_fb_flush_w.sig, cycle=4,
-    domain=domain, name="fb_flush",
-)
+# 步骤 1：声明反馈信号（由 cycle 4 的 WB 阶段产生）
+# 使用 push/pop 临时跳转到 cycle 4 定义信号
+domain.push()
+saved = domain.current_cycle
+while domain.current_cycle < 4:
+    domain.next()
+fb_flush = domain.signal("fb_flush", width=1)           # wire at cycle 4
+domain.pop()  # 恢复到之前的 cycle
 
-# 步骤 3：在 IF 阶段（cycle 0）使用 —— 4 >= 0 → 反馈，直接引用
+# 步骤 2：在 IF 阶段（cycle 0）使用 —— 4 >= 0 → 反馈，直接引用
 valid_if = ~fb_flush & ~fb_stop
 
 # ... 后续阶段 ...
 
-# 步骤 4：在 WB 阶段（cycle 4）驱动
-m.assign(_fb_flush_w, actual_flush_signal.sig)
+# 步骤 3：在 WB 阶段（cycle 4）驱动
+fb_flush.set(actual_flush_signal)
 ```
 
 ### 8.3 辅助函数模式
 
 ```python
-def _fb(name: str, width: int, cycle: int) -> tuple:
-    """创建反馈信号：返回 (占位导线, CycleAwareSignal)。"""
-    w = m.named_wire(name, width=width)
-    s = CycleAwareSignal(m=m, sig=w.sig, cycle=cycle, domain=domain, name=name)
-    return w, s
+def _fb(name: str, width: int, cycle: int) -> CycleAwareSignal:
+    """创建反馈信号：在指定 cycle 定义一个 wire 信号。"""
+    domain.push()
+    while domain.current_cycle < cycle:
+        domain.next()
+    sig = domain.signal(name, width=width)    # wire at target cycle
+    domain.pop()
+    return sig
 
 # 控制反馈（WB → 全部前级）
-_fb_flush_w, fb_flush           = _fb("fb_flush",       1,  cycle=4)
-_fb_redirect_pc_w, fb_redirect_pc = _fb("fb_redirect_pc", 64, cycle=4)
+fb_flush       = _fb("fb_flush",       1,  cycle=4)
+fb_redirect_pc = _fb("fb_redirect_pc", 64, cycle=4)
 
 # 数据前递（EX → ID）
-_fb_ex_alu_w, fb_ex_alu         = _fb("fb_ex_alu",      64, cycle=2)
+fb_ex_alu      = _fb("fb_ex_alu",      64, cycle=2)
 ```
 
 ### 8.4 反馈信号的周期平衡行为
@@ -686,11 +693,11 @@ p = q.pop(when=out_ready)                      # 出队
 ### 9.3 模块 I/O
 
 ```python
-# 输入（signal 无 reset → 组合信号/端口）
-data_in = domain.signal("data_in", width=8)
+# 输入端口（由外部驱动）
+data_in = domain.input("data_in", width=8)
 
-# 输出（.sig 获取底层原始信号）
-m.output("result", some_signal.sig)
+# 输出端口（直接传入 CycleAwareSignal，无需 .sig）
+m.output("result", some_signal)
 ```
 
 ---
@@ -765,9 +772,9 @@ cycle 4: WB  — 写回寄存器堆、分支解析
 ```python
 def _linx_cpu_impl(m, domain, mem_bytes):
     # ① 在 cycle 0 定义输入信号和所有 flop 信号（用 push/next/pop）
-    # ② 声明反馈信号（named_wire + CycleAwareSignal）
+    # ② 声明反馈信号（domain.signal() 在目标 cycle 定义 wire）
     # ③ 按 cycle 顺序：读 Q → 组合逻辑 → domain.next() → .set() D
-    # ④ 在每级驱动反馈信号
+    # ④ 在每级用 .set() 驱动反馈信号
     # ⑤ 声明输出
     ...
 ```
@@ -777,7 +784,7 @@ def _linx_cpu_impl(m, domain, mem_bytes):
 所有 flop 信号在其 **Q 输出被读取的 cycle** 定义：
 
 ```python
-boot_pc = domain.signal("boot_pc", width=64)                # cycle 0, 输入
+boot_pc = domain.input("boot_pc", width=64)                  # cycle 0, 输入端口
 
 # Cycle 0: IF 级 flop
 fetch_pc_r = domain.signal("fetch_pc_r", width=64, reset=0) # Q at cycle 0
@@ -812,18 +819,22 @@ domain.pop()   # 恢复到 cycle 0
 
 ```python
 def _fb(name, width, cycle):
-    w = m.named_wire(name, width=width)
-    s = CycleAwareSignal(m=m, sig=w.sig, cycle=cycle, domain=domain, name=name)
-    return w, s
+    """在指定 cycle 定义一个反馈 wire 信号。"""
+    domain.push()
+    while domain.current_cycle < cycle:
+        domain.next()
+    sig = domain.signal(name, width=width)    # wire at target cycle
+    domain.pop()
+    return sig
 
-_fb_flush_w, fb_flush           = _fb("fb_flush",       1,  cycle=4)
-_fb_redirect_pc_w, fb_redirect_pc = _fb("fb_redirect_pc", 64, cycle=4)
-_fb_stop_w, fb_stop             = _fb("fb_stop",        1,  cycle=4)
-_fb_ex_alu_w, fb_ex_alu         = _fb("fb_ex_alu",      64, cycle=2)
-_fb_mem_value_w, fb_mem_value   = _fb("fb_mem_value",    64, cycle=3)
-_fb_stall_id_w, fb_stall_id    = _fb("fb_stall_id",     1,  cycle=1)
-_fb_freeze_if_w, fb_freeze_if  = _fb("fb_freeze_if",    1,  cycle=0)
-_fb_freeze_id_w, fb_freeze_id  = _fb("fb_freeze_id",    1,  cycle=1)
+fb_flush       = _fb("fb_flush",       1,  cycle=4)
+fb_redirect_pc = _fb("fb_redirect_pc", 64, cycle=4)
+fb_stop        = _fb("fb_stop",        1,  cycle=4)
+fb_ex_alu      = _fb("fb_ex_alu",      64, cycle=2)
+fb_mem_value   = _fb("fb_mem_value",    64, cycle=3)
+fb_stall_id    = _fb("fb_stall_id",     1,  cycle=1)
+fb_freeze_if   = _fb("fb_freeze_if",    1,  cycle=0)
+fb_freeze_id   = _fb("fb_freeze_id",    1,  cycle=1)
 # ...
 ```
 
@@ -835,7 +846,7 @@ c = lambda v, w: domain.const(v, width=w)
 
 # 暂停链（fb_stall_* 的 cycle > 0 → 反馈，直接使用）
 cum_stall_if = fb_stall_id | fb_stall_ex | ...
-m.assign(_fb_freeze_if_w, (cum_stall_if & ~fb_flush).sig)
+fb_freeze_if.set(cum_stall_if & ~fb_flush)
 
 # 读取 fetch_pc_r 的 Q 输出（cycle 0 == current → 直接读）
 current_pc = mux(is_first, boot_pc, fetch_pc_r)
@@ -868,7 +879,7 @@ v = mux(fwd_ex_ok & srcl.eq(idex_regdst_r), fb_ex_alu, srcl_val)
 
 # 冒险检测
 stall_id = (load_use_hazard | tu_hazard) & valid_id
-m.assign(_fb_stall_id_w, stall_id.sig)
+fb_stall_id.set(stall_id)
 
 domain.next()  # → cycle 2（DFF 延迟）
 
@@ -879,27 +890,27 @@ idex_regdst_r.set(mux(id_to_ex_valid, regdst_id, c(REG_INVALID, 6)), when=~fb_fr
 
 # ======== Cycle 2: EX 阶段 ========
 ex_out = ex_stage_logic(m, domain, ...)
-m.assign(_fb_ex_alu_w, ex_out["alu"].sig)
+fb_ex_alu.set(ex_out["alu"])
 
 domain.next()  # → cycle 3
 # 赋值 EX/MEM flop ...
 
 # ======== Cycle 3: MEM 阶段 ========
 mem_out = mem_stage_logic(m, ...)
-m.assign(_fb_mem_value_w, mem_out["value"].sig)
+fb_mem_value.set(mem_out["value"])
 
 domain.next()  # → cycle 4
 # 赋值 MEM/WB flop ...
 
 # ======== Cycle 4: WB 阶段 ========
 wb_result = wb_stage_updates(m, ...)
-m.assign(_fb_flush_w, wb_result["flush"].sig)
-m.assign(_fb_redirect_pc_w, wb_result["redirect_pc"].sig)
-m.assign(_fb_stop_w, stop.sig)
+fb_flush.set(wb_result["flush"])
+fb_redirect_pc.set(wb_result["redirect_pc"])
+fb_stop.set(stop)
 
 # 声明输出
-m.output("halted", state_halted_r.sig)
-m.output("pc", state_pc_r.sig)
+m.output("halted", state_halted_r)
+m.output("pc", state_pc_r)
 # ...
 ```
 
@@ -915,11 +926,12 @@ PYC_VCD=1 PYC_TRACE_DIR=examples/generated/linx_cpu_pyc bash tools/run_linx_cpu_
 
 ## 附录：API 速查表
 
-### 信号定义（统一语法）
+### 信号定义
 
 ```python
-sig = domain.signal(name, width)                # 组合信号（wire）
-sig = domain.signal(name, width, reset=value)   # 时序信号（flop）
+sig = domain.input(name, width)                 # 输入端口（外部驱动）
+sig = domain.signal(name, width)                # 组合信号（wire，用 .set() 驱动）
+sig = domain.signal(name, width, reset=value)   # 时序信号（flop，用 .set() 驱动）
 ```
 
 ### 条件赋值
@@ -947,9 +959,24 @@ domain.pop()                       # 恢复 cycle
 ### 反馈信号
 
 ```python
-wire = m.named_wire(name, width)
-sig = CycleAwareSignal(m=m, sig=wire.sig, cycle=N, domain=domain, name=name)
-m.assign(wire, actual_value.sig)
+# 在信号产生的 cycle 定义 wire（使用 push/pop 跳转）
+domain.push()
+while domain.current_cycle < target_cycle:
+    domain.next()
+fb_sig = domain.signal(name, width=width)     # wire at target_cycle
+domain.pop()
+
+# 在前级使用（cycle >= current → 反馈，直接使用）
+result = fb_sig & mask
+
+# 在后级用 .set() 驱动
+fb_sig.set(actual_value)
+```
+
+### 输出端口
+
+```python
+m.output(name, signal)            # 直接传入 CycleAwareSignal
 ```
 
 ### 编译
