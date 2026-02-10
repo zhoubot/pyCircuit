@@ -233,8 +233,15 @@ C = [[c00, c01, ..., c0F],
 3. **Fixed array size**: 16×16 array is hardcoded
 4. **Simplified memory interface**: Real CPU integration would require proper bus protocol
 
+## Visual Documentation
+
+For detailed architecture diagrams, flowcharts, and visual representations, see:
+- [VISUAL_GUIDE.md](VISUAL_GUIDE.md) - Intuitive visual guide with animations and examples
+- [ARCHITECTURE.md](ARCHITECTURE.md) - Complete technical architecture with 15 detailed diagrams
+
 ## References
 
 - [pyCircuit Usage Guide](../../../../docs/USAGE.md)
 - [Janus BCC CPU](../bcc/janus_bcc_pyc.py)
 - [Systolic Array Architecture](https://en.wikipedia.org/wiki/Systolic_array)
+- [Improvement Plan](IMPROVEMENT_PLAN.md) - Future development roadmap
