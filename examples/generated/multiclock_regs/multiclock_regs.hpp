@@ -1,4 +1,6 @@
 // pyCircuit C++ emission (prototype)
+#include <cstdlib>
+#include <iostream>
 #include <pyc/cpp/pyc_sim.hpp>
 
 namespace pyc::gen {
@@ -84,15 +86,21 @@ struct MulticlockRegs {
     b_count = pyc_comb_13;
   }
 
-  void tick() {
-    // Two-phase update: compute next state for all sequential elements,
-    // then commit together. This avoids ordering artifacts between regs.
-    // Phase 1: compute.
+  void tick_compute() {
+    // Local sequential primitives.
     pyc_reg_11_inst.tick_compute();
     pyc_reg_7_inst.tick_compute();
-    // Phase 2: commit.
+  }
+
+  void tick_commit() {
+    // Local sequential primitives.
     pyc_reg_11_inst.tick_commit();
     pyc_reg_7_inst.tick_commit();
+  }
+
+  void tick() {
+    tick_compute();
+    tick_commit();
   }
 };
 

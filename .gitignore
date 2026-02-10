@@ -61,6 +61,8 @@ cover/
 *.vcd
 *.fst
 *.fsdb
+*.vvp
+*.kanata
 local_settings.py
 db.sqlite3
 db.sqlite3-journal
@@ -209,3 +211,9 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+# Verilog tool build outputs
+examples/generated/**/verilator/
+
+# Janus generated outputs (pyc-compile, verilator builds, benchmark artifacts)
+janus/generated/

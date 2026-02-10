@@ -13,6 +13,7 @@ Docs:
 - `docs/USAGE.md` (how to write designs; JIT rules; debug/tracing)
 - `docs/IR_SPEC.md` (PYC dialect contract)
 - `docs/PRIMITIVES.md` (backend template “ABI”: matching C++/Verilog primitives)
+- `docs/VERILOG_FLOW.md` (open-source Verilog sim/lint with Icarus/Verilator/GTKWave)
 
 ## Design goals (why this repo exists)
 
@@ -30,9 +31,9 @@ from pycircuit import Circuit, cat
 def build(m: Circuit, STAGES: int = 3) -> None:
     dom = m.domain("sys")
 
-    a = m.in_wire("a", width=16)
-    b = m.in_wire("b", width=16)
-    sel = m.in_wire("sel", width=1)
+    a = m.input("a", width=16)
+    b = m.input("b", width=16)
+    sel = m.input("sel", width=1)
 
     with m.scope("EX"):
         x = a ^ b
@@ -157,6 +158,10 @@ Regenerate the checked-in golden outputs under `examples/generated/`:
 ```bash
 scripts/pyc regen
 ```
+
+## Open-source Verilog simulation (Icarus / Verilator)
+
+See `docs/VERILOG_FLOW.md`.
 
 ## LinxISA CPU bring-up (example)
 
