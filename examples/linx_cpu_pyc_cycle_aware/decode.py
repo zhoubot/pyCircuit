@@ -34,7 +34,7 @@ from examples.linx_cpu_pyc.isa import (
     OP_XORW,
     REG_INVALID,
 )
-from .util import masked_eq
+from examples.linx_cpu_pyc_cycle_aware.util import masked_eq
 
 
 @dataclass(frozen=True)

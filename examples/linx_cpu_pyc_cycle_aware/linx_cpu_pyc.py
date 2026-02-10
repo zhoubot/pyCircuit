@@ -39,14 +39,14 @@ from examples.linx_cpu_pyc.isa import (
     OP_LWI,
     REG_INVALID,
 )
-from .memory import build_byte_mem
-from .pipeline import CoreState, RegFiles
-from .regfile import make_gpr, make_regs, read_reg
-from .util import make_consts
-from .decode import decode_window
-from .stages.ex_stage import ex_stage_logic
-from .stages.mem_stage import mem_stage_logic
-from .stages.wb_stage import wb_stage_updates
+from examples.linx_cpu_pyc_cycle_aware.decode import decode_window
+from examples.linx_cpu_pyc_cycle_aware.memory import build_byte_mem
+from examples.linx_cpu_pyc_cycle_aware.pipeline import CoreState, RegFiles
+from examples.linx_cpu_pyc_cycle_aware.regfile import make_gpr, make_regs, read_reg
+from examples.linx_cpu_pyc_cycle_aware.stages.ex_stage import ex_stage_logic
+from examples.linx_cpu_pyc_cycle_aware.stages.mem_stage import mem_stage_logic
+from examples.linx_cpu_pyc_cycle_aware.stages.wb_stage import wb_stage_updates
+from examples.linx_cpu_pyc_cycle_aware.util import make_consts
 
 
 def _linx_cpu_impl(
@@ -519,7 +519,7 @@ def _linx_cpu_impl(
 
 
 def linx_cpu_pyc_cycle_aware(m: CycleAwareCircuit, domain: CycleAwareDomain, *, mem_bytes: int = (1 << 20)) -> None:
-    _linx_cpu_impl(m, domain, mem_bytes=int(mem_bytes))
+    _linx_cpu_impl(m, domain, mem_bytes=mem_bytes)
 
 
 def build():

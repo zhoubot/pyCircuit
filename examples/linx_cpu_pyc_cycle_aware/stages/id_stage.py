@@ -2,10 +2,10 @@ from __future__ import annotations
 
 from pycircuit import CycleAwareCircuit, CycleAwareSignal
 
-from ..decode import decode_window
-from ..pipeline import IdExRegs, IfIdRegs, RegFiles
-from ..regfile import read_reg
-from ..util import Consts
+from examples.linx_cpu_pyc_cycle_aware.decode import decode_window
+from examples.linx_cpu_pyc_cycle_aware.pipeline import IdExRegs, IfIdRegs, RegFiles
+from examples.linx_cpu_pyc_cycle_aware.regfile import read_reg
+from examples.linx_cpu_pyc_cycle_aware.util import Consts
 
 
 def build_id_stage(

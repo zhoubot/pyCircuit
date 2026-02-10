@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pycircuit import CycleAwareCircuit, CycleAwareDomain, CycleAwareSignal, mux
 
-from ..isa import (
+from examples.linx_cpu_pyc.isa import (
     OP_ADDTPC,
     OP_ADDI,
     OP_ADDIW,
@@ -28,7 +28,7 @@ from ..isa import (
     OP_SWI,
     OP_XORW,
 )
-from ..util import Consts
+from examples.linx_cpu_pyc_cycle_aware.util import Consts
 
 
 def ex_stage_logic(

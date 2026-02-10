@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pycircuit import CycleAwareCircuit, CycleAwareDomain, CycleAwareSignal, mux
 
-from ..isa import (
+from examples.linx_cpu_pyc.isa import (
     BK_CALL,
     BK_COND,
     BK_FALL,
@@ -18,8 +18,8 @@ from ..isa import (
     OP_SWI,
     REG_INVALID,
 )
-from ..pipeline import CoreState, RegFiles
-from ..regfile import commit_gpr, commit_stack, stack_next
+from examples.linx_cpu_pyc_cycle_aware.pipeline import CoreState, RegFiles
+from examples.linx_cpu_pyc_cycle_aware.regfile import commit_gpr, commit_stack, stack_next
 
 
 def wb_stage_updates(
