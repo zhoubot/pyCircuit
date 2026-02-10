@@ -1382,6 +1382,48 @@ class CycleAwareSignal:
     def __rmul__(self, other: Union["CycleAwareSignal", int]) -> "CycleAwareSignal":
         return self.__mul__(other)
 
+    def _balanced_div(self, other: Union["CycleAwareSignal", int], is_mod: bool = False) -> "CycleAwareSignal":
+        """Division / modulo with cycle balancing."""
+        other_sig = self._as_signal(other)
+        a, b = self.m._balance_cycles(self, other_sig)
+        out_w = max(a.width, b.width)
+        a_sig, b_sig = a.sig, b.sig
+        if a.width < out_w:
+            a_sig = self.m.zext(a_sig, out_w)
+        if b.width < out_w:
+            b_sig = self.m.zext(b_sig, out_w)
+        if a.signed or b.signed:
+            op = self.m.smod if is_mod else self.m.sdiv
+            result_sig = op(a_sig, b_sig)
+            signed = True
+        else:
+            op = self.m.umod if is_mod else self.m.udiv
+            result_sig = op(a_sig, b_sig)
+            signed = False
+        name = "%" if is_mod else "//"
+        return CycleAwareSignal(
+            m=self.m, sig=result_sig, cycle=self.domain.current_cycle,
+            domain=self.domain, name=name, signed=signed,
+        )
+
+    def __floordiv__(self, other: Union["CycleAwareSignal", int]) -> "CycleAwareSignal":
+        return self._balanced_div(other, is_mod=False)
+
+    def __truediv__(self, other: Union["CycleAwareSignal", int]) -> "CycleAwareSignal":
+        return self.__floordiv__(other)
+
+    def __rfloordiv__(self, other: Union["CycleAwareSignal", int]) -> "CycleAwareSignal":
+        return self._as_signal(other).__floordiv__(self)
+
+    def __rtruediv__(self, other: Union["CycleAwareSignal", int]) -> "CycleAwareSignal":
+        return self.__rfloordiv__(other)
+
+    def __mod__(self, other: Union["CycleAwareSignal", int]) -> "CycleAwareSignal":
+        return self._balanced_div(other, is_mod=True)
+
+    def __rmod__(self, other: Union["CycleAwareSignal", int]) -> "CycleAwareSignal":
+        return self._as_signal(other).__mod__(self)
+
     def __and__(self, other: Union["CycleAwareSignal", int]) -> "CycleAwareSignal":
         return self._balanced_binop(other, self.m.and_, "&")
 

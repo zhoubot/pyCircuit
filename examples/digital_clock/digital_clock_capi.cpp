@@ -5,18 +5,17 @@
  * emulator via ctypes to perform true cycle-accurate simulation.
  *
  * Build:
- *   c++ -std=c++17 -O2 -shared -fPIC \
- *       -I../../include \
- *       -o libdigital_clock_sim.dylib \
- *       digital_clock_capi.cpp
+ *   cd <pyCircuit root>
+ *   c++ -std=c++17 -O2 -shared -fPIC -I include -I . \
+ *       -o examples/digital_clock/libdigital_clock_sim.dylib \
+ *       examples/digital_clock/digital_clock_capi.cpp
  */
 
 #include <cstdint>
 #include <pyc/cpp/pyc_sim.hpp>
 #include <pyc/cpp/pyc_tb.hpp>
 
-// The generated RTL model
-#include "../../examples/generated/digital_clock/digital_clock_gen.hpp"
+#include "examples/generated/digital_clock/digital_clock_gen.hpp"
 
 using pyc::cpp::Wire;
 
