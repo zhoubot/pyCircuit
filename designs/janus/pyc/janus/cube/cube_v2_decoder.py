@@ -1,7 +1,7 @@
 """Cube v2 MATMUL Decoder and Uop Generator.
 
 Decomposes MATMUL(M, K, N) instructions into micro-operations (uops) for the systolic array.
-Each uop represents a 16×16 tile multiplication.
+Each uop represents an ARRAY_SIZE×ARRAY_SIZE tile multiplication.
 """
 from __future__ import annotations
 from pycircuit import Circuit, Wire, jit_inline
@@ -34,12 +34,13 @@ def build_matmul_decoder(m: Circuit, *, clk: Wire, rst: Wire, consts: Consts, st
         with m.scope('TILE_CALC'):
             tile_size = c(ARRAY_SIZE, width=16)
             tile_mask = c(ARRAY_SIZE - 1, width=16)
+            tile_shift = (ARRAY_SIZE - 1).bit_length() - 1
             m_plus = inst_m + tile_mask
-            m_tiles_calc = m_plus >> 4
+            m_tiles_calc = m_plus >> tile_shift
             k_plus = inst_k + tile_mask
-            k_tiles_calc = k_plus >> 4
+            k_tiles_calc = k_plus >> tile_shift
             n_plus = inst_n + tile_mask
-            n_tiles_calc = n_plus >> 4
+            n_tiles_calc = n_plus >> tile_shift
         with m.scope('LATCH'):
             inst.m.set(inst_m, when=start)
             inst.k.set(inst_k, when=start)
