@@ -222,9 +222,16 @@ elif find "${ROOT_DIR}/runtime/cpp" -name '*.hpp' -newer "${TB_EXE}" | grep -q .
 fi
 
 if [[ "${need_build}" -ne 0 ]]; then
+  EXTRA_INC=()
+  if [[ -d "${ROOT_DIR}/include/pyc" ]]; then
+    # Compatibility path for generators that include <cpp/...> headers.
+    EXTRA_INC+=( -I "${ROOT_DIR}/include/pyc" )
+  fi
+
   tmp_exe="${TB_EXE}.tmp.$$"
   "${CXX:-clang++}" "${CXXFLAGS[@]}" \
     -I "${ROOT_DIR}/runtime" \
+    "${EXTRA_INC[@]}" \
     -I "${GEN_DIR}" \
     -o "${tmp_exe}" \
     "${TB_SRC}"
