@@ -17,6 +17,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <functional>
 #include <vector>
 
 using namespace mlir;
@@ -152,6 +153,70 @@ static void computeUniquePortNames(func::FuncOp f, std::vector<std::string> &inN
   for (unsigned i = 0; i < f.getNumResults(); ++i) {
     outNames.push_back(nt.unique(getPortName(f, i, /*isResult=*/true)));
   }
+}
+
+enum class SeqStateKind : std::uint8_t {
+  Unknown = 0,
+  Visiting = 1,
+  NoSequential = 2,
+  HasSequential = 3,
+};
+
+static bool functionHasSequentialState(func::FuncOp f,
+                                       ModuleOp mod,
+                                       llvm::DenseMap<Operation *, SeqStateKind> &memo) {
+  if (!f)
+    return true;
+
+  if (auto it = memo.find(f.getOperation()); it != memo.end()) {
+    if (it->second == SeqStateKind::Visiting) {
+      // Cyclic/self-recursive hierarchy is treated as sequential to stay safe.
+      return true;
+    }
+    return it->second == SeqStateKind::HasSequential;
+  }
+
+  memo[f.getOperation()] = SeqStateKind::Visiting;
+  bool hasSeq = false;
+
+  auto bodyBlock = f.getCallableRegion()->empty() ? nullptr : &f.getCallableRegion()->front();
+  if (!bodyBlock) {
+    memo[f.getOperation()] = SeqStateKind::HasSequential;
+    return true;
+  }
+
+  for (Operation &op : *bodyBlock) {
+    if (isa<pyc::RegOp,
+            pyc::FifoOp,
+            pyc::ByteMemOp,
+            pyc::SyncMemOp,
+            pyc::SyncMemDPOp,
+            pyc::AsyncFifoOp,
+            pyc::CdcSyncOp>(op)) {
+      hasSeq = true;
+      break;
+    }
+
+    if (auto inst = dyn_cast<pyc::InstanceOp>(op)) {
+      auto calleeAttr = inst->getAttrOfType<FlatSymbolRefAttr>("callee");
+      if (!calleeAttr) {
+        hasSeq = true;
+        break;
+      }
+      auto callee = mod.lookupSymbol<func::FuncOp>(calleeAttr.getValue());
+      if (!callee) {
+        hasSeq = true;
+        break;
+      }
+      if (functionHasSequentialState(callee, mod, memo)) {
+        hasSeq = true;
+        break;
+      }
+    }
+  }
+
+  memo[f.getOperation()] = hasSeq ? SeqStateKind::HasSequential : SeqStateKind::NoSequential;
+  return hasSeq;
 }
 
 static LogicalResult emitCombAssign(Operation &op, llvm::raw_ostream &os, NameTable &nt) {
@@ -500,12 +565,12 @@ static LogicalResult emitFunc(func::FuncOp f, llvm::raw_ostream &os) {
   std::vector<InstInfo> instInfos;
   instInfos.reserve(instances.size());
   llvm::DenseMap<Operation *, unsigned> instIndex;
+  ModuleOp mod = f->getParentOfType<ModuleOp>();
+  if (!mod)
+    return f.emitError("C++ emitter: missing parent module for instance resolution");
+  std::vector<bool> instHasSequentialCallee{};
 
   if (!instances.empty()) {
-    ModuleOp mod = f->getParentOfType<ModuleOp>();
-    if (!mod)
-      return f.emitError("C++ emitter: missing parent module for instance resolution");
-
     for (auto inst : instances) {
       auto calleeAttr = inst->getAttrOfType<FlatSymbolRefAttr>("callee");
       if (!calleeAttr)
@@ -533,6 +598,12 @@ static LogicalResult emitFunc(func::FuncOp f, llvm::raw_ostream &os) {
       instIndex.try_emplace(inst.getOperation(), idx);
       instInfos.push_back(InstInfo{inst, callee, std::move(member), std::move(inPorts), std::move(outPorts)});
     }
+
+    llvm::DenseMap<Operation *, SeqStateKind> seqMemo{};
+    instHasSequentialCallee.reserve(instInfos.size());
+    for (const auto &ii : instInfos) {
+      instHasSequentialCallee.push_back(functionHasSequentialState(ii.callee, mod, seqMemo));
+    }
   }
 
   llvm::DenseMap<Operation *, std::string> byteMemInstName;
@@ -554,7 +625,12 @@ static LogicalResult emitFunc(func::FuncOp f, llvm::raw_ostream &os) {
       os << "  bool " << ii.member << "_eval_cache_valid = false;\n";
       for (unsigned i = 0; i < inst.getNumOperands(); ++i) {
         std::string cacheName = ii.member + "_eval_cache_in_" + std::to_string(i);
+        unsigned inW = bitWidth(inst.getOperand(i).getType());
         os << "  " << cppType(inst.getOperand(i).getType()) << " " << cacheName << "{};\n";
+        os << "  std::uint64_t " << ii.member << "_eval_cache_in_ver_" << i << " = 1ull;\n";
+        os << "  std::uint64_t " << ii.member << "_eval_cache_in_seen_ver_" << i << " = 0ull;\n";
+        if (inW <= 64)
+          os << "  std::uint64_t " << ii.member << "_eval_cache_in_fp_" << i << " = 0ull;\n";
       }
     }
     os << "\n";
@@ -564,7 +640,7 @@ static LogicalResult emitFunc(func::FuncOp f, llvm::raw_ostream &os) {
     unsigned w = bitWidth(r.getQ().getType());
     if (w == 0)
       return r.emitError("invalid reg width");
-    os << "  pyc::cpp::pyc_reg<" << w << "> " << nt.get(r.getQ()) << "_inst;\n";
+    os << "  pyc::cpp::pyc_reg<" << w << "> *" << nt.get(r.getQ()) << "_inst = nullptr;\n";
   }
   for (auto fifo : fifos) {
     unsigned w = bitWidth(fifo.getOutData().getType());
@@ -574,7 +650,22 @@ static LogicalResult emitFunc(func::FuncOp f, llvm::raw_ostream &os) {
     if (!depthAttr)
       return fifo.emitError("missing integer attribute `depth`");
     auto depth = depthAttr.getValue().getZExtValue();
-    os << "  pyc::cpp::pyc_fifo<" << w << ", " << depth << "> " << nt.get(fifo.getInReady()) << "_inst;\n";
+    std::string instName = nt.get(fifo.getInReady()) + "_inst";
+    os << "  pyc::cpp::pyc_fifo<" << w << ", " << depth << "> " << instName << ";\n";
+    os << "  bool " << instName << "_eval_cache_valid = false;\n";
+    os << "  " << cppType(fifo.getInValid().getType()) << " " << instName << "_eval_cache_in_valid{};\n";
+    os << "  std::uint64_t " << instName << "_eval_cache_in_valid_ver = 1ull;\n";
+    os << "  std::uint64_t " << instName << "_eval_cache_in_valid_seen_ver = 0ull;\n";
+    os << "  std::uint64_t " << instName << "_eval_cache_in_valid_fp = 0ull;\n";
+    os << "  " << cppType(fifo.getInData().getType()) << " " << instName << "_eval_cache_in_data{};\n";
+    os << "  std::uint64_t " << instName << "_eval_cache_in_data_ver = 1ull;\n";
+    os << "  std::uint64_t " << instName << "_eval_cache_in_data_seen_ver = 0ull;\n";
+    if (w <= 64)
+      os << "  std::uint64_t " << instName << "_eval_cache_in_data_fp = 0ull;\n";
+    os << "  " << cppType(fifo.getOutReady().getType()) << " " << instName << "_eval_cache_out_ready{};\n";
+    os << "  std::uint64_t " << instName << "_eval_cache_out_ready_ver = 1ull;\n";
+    os << "  std::uint64_t " << instName << "_eval_cache_out_ready_seen_ver = 0ull;\n";
+    os << "  std::uint64_t " << instName << "_eval_cache_out_ready_fp = 0ull;\n";
   }
   for (auto mem : byteMems) {
     auto addrTy = dyn_cast<IntegerType>(mem.getRaddr().getType());
@@ -599,6 +690,34 @@ static LogicalResult emitFunc(func::FuncOp f, llvm::raw_ostream &os) {
     byteMemInstName.try_emplace(mem.getOperation(), instName);
 
     os << "  pyc::cpp::pyc_byte_mem<" << addrW << ", " << dataW << ", " << depth << "> " << instName << ";\n";
+    os << "  bool " << instName << "_eval_cache_valid = false;\n";
+    os << "  " << cppType(mem.getRst().getType()) << " " << instName << "_eval_cache_rst{};\n";
+    os << "  std::uint64_t " << instName << "_eval_cache_rst_ver = 1ull;\n";
+    os << "  std::uint64_t " << instName << "_eval_cache_rst_seen_ver = 0ull;\n";
+    os << "  std::uint64_t " << instName << "_eval_cache_rst_fp = 0ull;\n";
+    os << "  " << cppType(mem.getRaddr().getType()) << " " << instName << "_eval_cache_raddr{};\n";
+    os << "  std::uint64_t " << instName << "_eval_cache_raddr_ver = 1ull;\n";
+    os << "  std::uint64_t " << instName << "_eval_cache_raddr_seen_ver = 0ull;\n";
+    if (addrW <= 64)
+      os << "  std::uint64_t " << instName << "_eval_cache_raddr_fp = 0ull;\n";
+    os << "  " << cppType(mem.getWvalid().getType()) << " " << instName << "_eval_cache_wvalid{};\n";
+    os << "  std::uint64_t " << instName << "_eval_cache_wvalid_ver = 1ull;\n";
+    os << "  std::uint64_t " << instName << "_eval_cache_wvalid_seen_ver = 0ull;\n";
+    os << "  std::uint64_t " << instName << "_eval_cache_wvalid_fp = 0ull;\n";
+    os << "  " << cppType(mem.getWaddr().getType()) << " " << instName << "_eval_cache_waddr{};\n";
+    os << "  std::uint64_t " << instName << "_eval_cache_waddr_ver = 1ull;\n";
+    os << "  std::uint64_t " << instName << "_eval_cache_waddr_seen_ver = 0ull;\n";
+    if (addrW <= 64)
+      os << "  std::uint64_t " << instName << "_eval_cache_waddr_fp = 0ull;\n";
+    os << "  " << cppType(mem.getWdata().getType()) << " " << instName << "_eval_cache_wdata{};\n";
+    os << "  std::uint64_t " << instName << "_eval_cache_wdata_ver = 1ull;\n";
+    os << "  std::uint64_t " << instName << "_eval_cache_wdata_seen_ver = 0ull;\n";
+    if (dataW <= 64)
+      os << "  std::uint64_t " << instName << "_eval_cache_wdata_fp = 0ull;\n";
+    os << "  " << cppType(mem.getWstrb().getType()) << " " << instName << "_eval_cache_wstrb{};\n";
+    os << "  std::uint64_t " << instName << "_eval_cache_wstrb_ver = 1ull;\n";
+    os << "  std::uint64_t " << instName << "_eval_cache_wstrb_seen_ver = 0ull;\n";
+    os << "  std::uint64_t " << instName << "_eval_cache_wstrb_fp = 0ull;\n";
   }
   for (auto mem : syncMems) {
     auto addrTy = dyn_cast<IntegerType>(mem.getRaddr().getType());
@@ -656,7 +775,30 @@ static LogicalResult emitFunc(func::FuncOp f, llvm::raw_ostream &os) {
     if (!depthAttr)
       return fifo.emitError("missing integer attribute `depth`");
     auto depth = depthAttr.getValue().getZExtValue();
-    os << "  pyc::cpp::pyc_async_fifo<" << w << ", " << depth << "> " << nt.get(fifo.getInReady()) << "_inst;\n";
+    std::string instName = nt.get(fifo.getInReady()) + "_inst";
+    os << "  pyc::cpp::pyc_async_fifo<" << w << ", " << depth << "> " << instName << ";\n";
+    os << "  bool " << instName << "_eval_cache_valid = false;\n";
+    os << "  " << cppType(fifo.getInRst().getType()) << " " << instName << "_eval_cache_in_rst{};\n";
+    os << "  std::uint64_t " << instName << "_eval_cache_in_rst_ver = 1ull;\n";
+    os << "  std::uint64_t " << instName << "_eval_cache_in_rst_seen_ver = 0ull;\n";
+    os << "  std::uint64_t " << instName << "_eval_cache_in_rst_fp = 0ull;\n";
+    os << "  " << cppType(fifo.getOutRst().getType()) << " " << instName << "_eval_cache_out_rst{};\n";
+    os << "  std::uint64_t " << instName << "_eval_cache_out_rst_ver = 1ull;\n";
+    os << "  std::uint64_t " << instName << "_eval_cache_out_rst_seen_ver = 0ull;\n";
+    os << "  std::uint64_t " << instName << "_eval_cache_out_rst_fp = 0ull;\n";
+    os << "  " << cppType(fifo.getInValid().getType()) << " " << instName << "_eval_cache_in_valid{};\n";
+    os << "  std::uint64_t " << instName << "_eval_cache_in_valid_ver = 1ull;\n";
+    os << "  std::uint64_t " << instName << "_eval_cache_in_valid_seen_ver = 0ull;\n";
+    os << "  std::uint64_t " << instName << "_eval_cache_in_valid_fp = 0ull;\n";
+    os << "  " << cppType(fifo.getInData().getType()) << " " << instName << "_eval_cache_in_data{};\n";
+    os << "  std::uint64_t " << instName << "_eval_cache_in_data_ver = 1ull;\n";
+    os << "  std::uint64_t " << instName << "_eval_cache_in_data_seen_ver = 0ull;\n";
+    if (w <= 64)
+      os << "  std::uint64_t " << instName << "_eval_cache_in_data_fp = 0ull;\n";
+    os << "  " << cppType(fifo.getOutReady().getType()) << " " << instName << "_eval_cache_out_ready{};\n";
+    os << "  std::uint64_t " << instName << "_eval_cache_out_ready_ver = 1ull;\n";
+    os << "  std::uint64_t " << instName << "_eval_cache_out_ready_seen_ver = 0ull;\n";
+    os << "  std::uint64_t " << instName << "_eval_cache_out_ready_fp = 0ull;\n";
   }
   for (auto s : cdcSyncs) {
     unsigned w = bitWidth(s.getOut().getType());
@@ -669,16 +811,63 @@ static LogicalResult emitFunc(func::FuncOp f, llvm::raw_ostream &os) {
   }
   os << "\n";
 
+  os << "  struct _pyc_sim_stats_t {\n";
+  os << "    std::uint64_t instance_eval_calls = 0;\n";
+  os << "    std::uint64_t instance_cache_skips = 0;\n";
+  os << "    std::uint64_t primitive_eval_calls = 0;\n";
+  os << "    std::uint64_t primitive_cache_skips = 0;\n";
+  os << "    std::uint64_t fallback_iterations = 0;\n";
+  os << "  };\n";
+  os << "  bool _pyc_sim_stats_enable = false;\n";
+  os << "  bool _pyc_sim_fast_enable = false;\n";
+  os << "  std::string _pyc_sim_stats_path{};\n";
+  os << "  _pyc_sim_stats_t _pyc_sim_stats{};\n\n";
+  os << "  static bool _pyc_parse_bool_env(const char *name, bool dflt = false) {\n";
+  os << "    const char *v = std::getenv(name);\n";
+  os << "    if (!v || !*v)\n";
+  os << "      return dflt;\n";
+  os << "    if (v[0] == '0')\n";
+  os << "      return false;\n";
+  os << "    if (v[0] == '1')\n";
+  os << "      return true;\n";
+  os << "    return dflt;\n";
+  os << "  }\n\n";
+  os << "  void _pyc_init_runtime_controls() {\n";
+  os << "    _pyc_sim_stats_enable = _pyc_parse_bool_env(\"PYC_SIM_STATS\", false);\n";
+  os << "    _pyc_sim_fast_enable = _pyc_parse_bool_env(\"PYC_SIM_FAST\", false);\n";
+  os << "    const char *path = std::getenv(\"PYC_SIM_STATS_PATH\");\n";
+  os << "    if (path && *path)\n";
+  os << "      _pyc_sim_stats_path = path;\n";
+  os << "  }\n\n";
+  os << "  void reset_sim_stats() { _pyc_sim_stats = _pyc_sim_stats_t{}; }\n\n";
+  os << "  void dump_sim_stats(std::ostream &os) const {\n";
+  os << "    os << \"instance_eval_calls=\" << _pyc_sim_stats.instance_eval_calls << \"\\n\";\n";
+  os << "    os << \"instance_cache_skips=\" << _pyc_sim_stats.instance_cache_skips << \"\\n\";\n";
+  os << "    os << \"primitive_eval_calls=\" << _pyc_sim_stats.primitive_eval_calls << \"\\n\";\n";
+  os << "    os << \"primitive_cache_skips=\" << _pyc_sim_stats.primitive_cache_skips << \"\\n\";\n";
+  os << "    os << \"fallback_iterations=\" << _pyc_sim_stats.fallback_iterations << \"\\n\";\n";
+  os << "  }\n\n";
+  os << "  void dump_sim_stats_to_path(const char *path = nullptr) const {\n";
+  os << "    const char *outPath = path;\n";
+  os << "    if (!outPath || !*outPath)\n";
+  os << "      outPath = _pyc_sim_stats_path.c_str();\n";
+  os << "    if (!outPath || !*outPath)\n";
+  os << "      return;\n";
+  os << "    std::ofstream ofs(outPath, std::ios::out | std::ios::trunc);\n";
+  os << "    if (!ofs)\n";
+  os << "      return;\n";
+  os << "    dump_sim_stats(ofs);\n";
+  os << "  }\n\n";
+
+  os << "  void _pyc_validate_primitive_bindings() const {\n";
+  for (auto r : regs)
+    os << "    if (!" << nt.get(r.getQ()) << "_inst) { std::cerr << \"pyc null reg binding: " << nt.get(r.getQ())
+       << "_inst\" << \"\\n\"; std::abort(); }\n";
+  os << "  }\n\n";
+
   // Constructor (wire members default-initialize to 0).
   os << "  " << structName << "()";
   bool firstInit = true;
-  for (auto r : regs) {
-    os << (firstInit ? " :\n" : ",\n");
-    firstInit = false;
-    os << "      " << nt.get(r.getQ()) << "_inst(" << nt.get(r.getClk()) << ", " << nt.get(r.getRst()) << ", "
-       << nt.get(r.getEn()) << ", " << nt.get(r.getNext()) << ", " << nt.get(r.getInit()) << ", " << nt.get(r.getQ())
-       << ")";
-  }
   for (auto fifo : fifos) {
     os << (firstInit ? " :\n" : ",\n");
     firstInit = false;
@@ -731,7 +920,19 @@ static LogicalResult emitFunc(func::FuncOp f, llvm::raw_ostream &os) {
        << nt.get(s.getIn()) << ", " << nt.get(s.getOut()) << ")";
   }
   os << " {\n";
+  for (auto r : regs) {
+    unsigned w = bitWidth(r.getQ().getType());
+    if (w == 0)
+      return r.emitError("invalid reg width");
+    os << "    " << nt.get(r.getQ()) << "_inst = new pyc::cpp::pyc_reg<" << w << ">("
+       << nt.get(r.getClk()) << ", " << nt.get(r.getRst()) << ", " << nt.get(r.getEn()) << ", " << nt.get(r.getNext())
+       << ", " << nt.get(r.getInit()) << ", " << nt.get(r.getQ()) << ");\n";
+  }
+  os << "    _pyc_validate_primitive_bindings();\n";
+  os << "    _pyc_init_runtime_controls();\n";
+  os << "    #ifdef PYC_ENABLE_CTOR_EVAL\n";
   os << "    eval();\n";
+  os << "    #endif\n";
   os << "  }\n\n";
 
   // Emit fused comb helpers.
@@ -947,120 +1148,712 @@ static LogicalResult emitFunc(func::FuncOp f, llvm::raw_ostream &os) {
   llvm::SmallVector<Operation *> fullOrdered;
   bool hasFullTopo = topoOrder(/*includePrims=*/true, fullOrdered);
 
-  auto emitInstanceEvalWithCache = [&](const InstInfo &ii, llvm::StringRef indent) {
+  llvm::SmallVector<std::string> instanceEvalHelperNames;
+  instanceEvalHelperNames.reserve(instInfos.size());
+  for (unsigned idx = 0; idx < instInfos.size(); ++idx) {
+    std::string helperName = "eval_instance_cached_" + std::to_string(idx);
+    instanceEvalHelperNames.push_back(helperName);
+  }
+
+  auto emitInstanceEvalHelperDefinition = [&](const InstInfo &ii, llvm::StringRef helperName) {
     auto inst = ii.op;
-    os << indent << "#ifdef PYC_DISABLE_INSTANCE_EVAL_CACHE\n";
-    for (unsigned i = 0; i < inst.getNumOperands(); ++i)
-      os << indent << ii.member << "." << ii.inPorts[i] << " = " << nt.get(inst.getOperand(i)) << ";\n";
-    os << indent << ii.member << ".eval();\n";
-    os << indent << "#else\n";
+    os << "  inline bool " << helperName << "() {\n";
+    os << "    bool _pyc_inst_changed = false;\n";
+    os << "    #ifdef PYC_DISABLE_INSTANCE_EVAL_CACHE\n";
+    for (unsigned i = 0; i < inst.getNumOperands(); ++i) {
+      std::string inValue = nt.get(inst.getOperand(i));
+      os << "    " << ii.member << "." << ii.inPorts[i] << " = " << inValue << ";\n";
+    }
+    os << "    " << ii.member << ".eval();\n";
+    os << "    if (_pyc_sim_stats_enable) _pyc_sim_stats.instance_eval_calls++;\n";
+    os << "    _pyc_inst_changed = true;\n";
+    os << "    #else\n";
     std::string changedFlag = ii.member + "_eval_cache_changed";
-    os << indent << "bool " << changedFlag << " = !" << ii.member << "_eval_cache_valid;\n";
+    os << "    bool " << changedFlag << " = !" << ii.member << "_eval_cache_valid;\n";
+    os << "    #ifndef PYC_DISABLE_VERSIONED_INPUT_CACHE\n";
     for (unsigned i = 0; i < inst.getNumOperands(); ++i) {
       std::string cacheName = ii.member + "_eval_cache_in_" + std::to_string(i);
       std::string inValue = nt.get(inst.getOperand(i));
-      os << indent << "if (!" << changedFlag << " && (" << cacheName << " != " << inValue << ")) " << changedFlag
+      std::string verName = ii.member + "_eval_cache_in_ver_" + std::to_string(i);
+      std::string seenName = ii.member + "_eval_cache_in_seen_ver_" + std::to_string(i);
+      unsigned inW = bitWidth(inst.getOperand(i).getType());
+      os << "    if (" << ii.member << "_eval_cache_valid) {\n";
+      if (inW <= 64) {
+        std::string fpName = ii.member + "_eval_cache_in_fp_" + std::to_string(i);
+        os << "      std::uint64_t _pyc_fp_" << i << " = static_cast<std::uint64_t>(" << inValue << ".value());\n";
+        os << "      if (" << fpName << " != _pyc_fp_" << i << ") {\n";
+        os << "        " << fpName << " = _pyc_fp_" << i << ";\n";
+        os << "        " << cacheName << " = " << inValue << ";\n";
+        os << "        ++" << verName << ";\n";
+        os << "      }\n";
+      } else {
+        os << "      if (" << cacheName << " != " << inValue << ") {\n";
+        os << "        " << cacheName << " = " << inValue << ";\n";
+        os << "        ++" << verName << ";\n";
+        os << "      }\n";
+      }
+      os << "    } else {\n";
+      os << "      " << cacheName << " = " << inValue << ";\n";
+      if (inW <= 64) {
+        std::string fpName = ii.member + "_eval_cache_in_fp_" + std::to_string(i);
+        os << "      " << fpName << " = static_cast<std::uint64_t>(" << inValue << ".value());\n";
+      }
+      os << "      ++" << verName << ";\n";
+      os << "    }\n";
+      os << "    if (!" << changedFlag << " && (" << seenName << " != " << verName << ")) " << changedFlag
          << " = true;\n";
-      os << indent << ii.member << "." << ii.inPorts[i] << " = " << inValue << ";\n";
-      os << indent << cacheName << " = " << inValue << ";\n";
+      os << "    " << seenName << " = " << verName << ";\n";
     }
-    os << indent << "if (" << changedFlag << ") " << ii.member << ".eval();\n";
-    os << indent << ii.member << "_eval_cache_valid = true;\n";
-    os << indent << "#endif\n";
+    os << "    if (" << changedFlag << ") {\n";
+    for (unsigned i = 0; i < inst.getNumOperands(); ++i) {
+      std::string cacheName = ii.member + "_eval_cache_in_" + std::to_string(i);
+      os << "      " << ii.member << "." << ii.inPorts[i] << " = " << cacheName << ";\n";
+    }
+    os << "      " << ii.member << ".eval();\n";
+    os << "      if (_pyc_sim_stats_enable) _pyc_sim_stats.instance_eval_calls++;\n";
+    os << "    } else {\n";
+    os << "      if (_pyc_sim_stats_enable) _pyc_sim_stats.instance_cache_skips++;\n";
+    os << "    }\n";
+    os << "    #else\n";
+    for (unsigned i = 0; i < inst.getNumOperands(); ++i) {
+      std::string cacheName = ii.member + "_eval_cache_in_" + std::to_string(i);
+      std::string inValue = nt.get(inst.getOperand(i));
+      os << "    if (!" << changedFlag << " && (" << cacheName << " != " << inValue << ")) " << changedFlag
+         << " = true;\n";
+    }
+    os << "    if (" << changedFlag << ") {\n";
+    for (unsigned i = 0; i < inst.getNumOperands(); ++i) {
+      std::string cacheName = ii.member + "_eval_cache_in_" + std::to_string(i);
+      std::string inValue = nt.get(inst.getOperand(i));
+      os << "      " << ii.member << "." << ii.inPorts[i] << " = " << inValue << ";\n";
+      os << "      " << cacheName << " = " << inValue << ";\n";
+    }
+    os << "      " << ii.member << ".eval();\n";
+    os << "      if (_pyc_sim_stats_enable) _pyc_sim_stats.instance_eval_calls++;\n";
+    os << "    } else {\n";
+    os << "      if (_pyc_sim_stats_enable) _pyc_sim_stats.instance_cache_skips++;\n";
+    os << "    }\n";
+    os << "    #endif\n";
+    os << "    _pyc_inst_changed = " << changedFlag << ";\n";
+    os << "    " << ii.member << "_eval_cache_valid = true;\n";
+    os << "    #endif\n";
     for (unsigned i = 0; i < inst.getNumResults(); ++i)
-      os << indent << nt.get(inst.getResult(i)) << " = " << ii.member << "." << ii.outPorts[i] << ";\n";
+      os << "    " << nt.get(inst.getResult(i)) << " = " << ii.member << "." << ii.outPorts[i] << ";\n";
+    os << "    return _pyc_inst_changed;\n";
+    os << "  }\n\n";
   };
+
+  for (unsigned idx = 0; idx < instInfos.size(); ++idx)
+    emitInstanceEvalHelperDefinition(instInfos[idx], instanceEvalHelperNames[idx]);
+
+  auto emitInstanceEvalWithCache =
+      [&](const InstInfo &ii, llvm::StringRef indent, llvm::StringRef changedAnyVar = llvm::StringRef()) {
+    auto it = instIndex.find(const_cast<pyc::InstanceOp &>(ii.op).getOperation());
+    if (it == instIndex.end())
+      return;
+    llvm::StringRef helperName = instanceEvalHelperNames[it->second];
+    if (!changedAnyVar.empty()) {
+      os << indent << "if (" << helperName << "()) " << changedAnyVar << " = true;\n";
+    } else {
+      os << indent << helperName << "();\n";
+    }
+  };
+
+  auto emitFifoEvalWithCache =
+      [&](pyc::FifoOp fifo, llvm::StringRef indent, llvm::StringRef changedAnyVar = llvm::StringRef()) {
+    std::string instName = nt.get(fifo.getInReady()) + "_inst";
+    std::string changedFlag = instName + "_eval_cache_changed";
+    std::string inValid = nt.get(fifo.getInValid());
+    std::string inData = nt.get(fifo.getInData());
+    std::string outReady = nt.get(fifo.getOutReady());
+    unsigned dataW = bitWidth(fifo.getInData().getType());
+    os << indent << "#ifdef PYC_DISABLE_PRIMITIVE_EVAL_CACHE\n";
+    os << indent << instName << ".eval();\n";
+    os << indent << "if (_pyc_sim_stats_enable) _pyc_sim_stats.primitive_eval_calls++;\n";
+    if (!changedAnyVar.empty())
+      os << indent << changedAnyVar << " = true;\n";
+    os << indent << "#else\n";
+    os << indent << "#ifndef PYC_DISABLE_VERSIONED_INPUT_CACHE\n";
+    os << indent << "bool " << changedFlag << " = !" << instName << "_eval_cache_valid;\n";
+    os << indent << "if (" << instName << "_eval_cache_valid) {\n";
+    os << indent << "  std::uint64_t _pyc_fp_v = static_cast<std::uint64_t>(" << inValid << ".value());\n";
+    os << indent << "  if (" << instName << "_eval_cache_in_valid_fp != _pyc_fp_v) {\n";
+    os << indent << "    " << instName << "_eval_cache_in_valid_fp = _pyc_fp_v;\n";
+    os << indent << "    " << instName << "_eval_cache_in_valid = " << inValid << ";\n";
+    os << indent << "    ++" << instName << "_eval_cache_in_valid_ver;\n";
+    os << indent << "  }\n";
+    if (dataW <= 64) {
+      os << indent << "  std::uint64_t _pyc_fp_d = static_cast<std::uint64_t>(" << inData << ".value());\n";
+      os << indent << "  if (" << instName << "_eval_cache_in_data_fp != _pyc_fp_d) {\n";
+      os << indent << "    " << instName << "_eval_cache_in_data_fp = _pyc_fp_d;\n";
+      os << indent << "    " << instName << "_eval_cache_in_data = " << inData << ";\n";
+      os << indent << "    ++" << instName << "_eval_cache_in_data_ver;\n";
+      os << indent << "  }\n";
+    } else {
+      os << indent << "  if (" << instName << "_eval_cache_in_data != " << inData << ") {\n";
+      os << indent << "    " << instName << "_eval_cache_in_data = " << inData << ";\n";
+      os << indent << "    ++" << instName << "_eval_cache_in_data_ver;\n";
+      os << indent << "  }\n";
+    }
+    os << indent << "  std::uint64_t _pyc_fp_r = static_cast<std::uint64_t>(" << outReady << ".value());\n";
+    os << indent << "  if (" << instName << "_eval_cache_out_ready_fp != _pyc_fp_r) {\n";
+    os << indent << "    " << instName << "_eval_cache_out_ready_fp = _pyc_fp_r;\n";
+    os << indent << "    " << instName << "_eval_cache_out_ready = " << outReady << ";\n";
+    os << indent << "    ++" << instName << "_eval_cache_out_ready_ver;\n";
+    os << indent << "  }\n";
+    os << indent << "} else {\n";
+    os << indent << "  " << instName << "_eval_cache_in_valid = " << inValid << ";\n";
+    os << indent << "  " << instName << "_eval_cache_in_valid_fp = static_cast<std::uint64_t>(" << inValid << ".value());\n";
+    os << indent << "  ++" << instName << "_eval_cache_in_valid_ver;\n";
+    os << indent << "  " << instName << "_eval_cache_in_data = " << inData << ";\n";
+    if (dataW <= 64)
+      os << indent << "  " << instName << "_eval_cache_in_data_fp = static_cast<std::uint64_t>(" << inData << ".value());\n";
+    os << indent << "  ++" << instName << "_eval_cache_in_data_ver;\n";
+    os << indent << "  " << instName << "_eval_cache_out_ready = " << outReady << ";\n";
+    os << indent << "  " << instName << "_eval_cache_out_ready_fp = static_cast<std::uint64_t>(" << outReady
+       << ".value());\n";
+    os << indent << "  ++" << instName << "_eval_cache_out_ready_ver;\n";
+    os << indent << "}\n";
+    os << indent << "if (!" << changedFlag << " && (" << instName << "_eval_cache_in_valid_seen_ver != " << instName
+       << "_eval_cache_in_valid_ver)) " << changedFlag << " = true;\n";
+    os << indent << "if (!" << changedFlag << " && (" << instName << "_eval_cache_in_data_seen_ver != " << instName
+       << "_eval_cache_in_data_ver)) " << changedFlag << " = true;\n";
+    os << indent << "if (!" << changedFlag << " && (" << instName << "_eval_cache_out_ready_seen_ver != " << instName
+       << "_eval_cache_out_ready_ver)) " << changedFlag << " = true;\n";
+    os << indent << instName << "_eval_cache_in_valid_seen_ver = " << instName << "_eval_cache_in_valid_ver;\n";
+    os << indent << instName << "_eval_cache_in_data_seen_ver = " << instName << "_eval_cache_in_data_ver;\n";
+    os << indent << instName << "_eval_cache_out_ready_seen_ver = " << instName << "_eval_cache_out_ready_ver;\n";
+    os << indent << "#else\n";
+    os << indent << "bool " << changedFlag << " = !" << instName << "_eval_cache_valid;\n";
+    os << indent << "if (!" << changedFlag << " && (" << instName << "_eval_cache_in_valid != " << inValid << ")) "
+       << changedFlag << " = true;\n";
+    os << indent << "if (!" << changedFlag << " && (" << instName << "_eval_cache_in_data != " << inData << ")) "
+       << changedFlag << " = true;\n";
+    os << indent << "if (!" << changedFlag << " && (" << instName << "_eval_cache_out_ready != " << outReady
+       << ")) " << changedFlag << " = true;\n";
+    os << indent << "#endif\n";
+    os << indent << "if (" << changedFlag << ") {\n";
+    os << indent << "  " << instName << ".eval();\n";
+    os << indent << "  if (_pyc_sim_stats_enable) _pyc_sim_stats.primitive_eval_calls++;\n";
+    os << indent << "} else {\n";
+    os << indent << "  if (_pyc_sim_stats_enable) _pyc_sim_stats.primitive_cache_skips++;\n";
+    os << indent << "}\n";
+    if (!changedAnyVar.empty())
+      os << indent << "if (" << changedFlag << ") " << changedAnyVar << " = true;\n";
+    os << indent << "#ifdef PYC_DISABLE_VERSIONED_INPUT_CACHE\n";
+    os << indent << "if (" << changedFlag << ") {\n";
+    os << indent << "  " << instName << "_eval_cache_in_valid = " << inValid << ";\n";
+    os << indent << "  " << instName << "_eval_cache_in_data = " << inData << ";\n";
+    os << indent << "  " << instName << "_eval_cache_out_ready = " << outReady << ";\n";
+    os << indent << "}\n";
+    os << indent << "#endif\n";
+    os << indent << instName << "_eval_cache_valid = true;\n";
+    os << indent << "#endif\n";
+  };
+
+  auto emitAsyncFifoEvalWithCache =
+      [&](pyc::AsyncFifoOp fifo, llvm::StringRef indent, llvm::StringRef changedAnyVar = llvm::StringRef()) {
+    std::string instName = nt.get(fifo.getInReady()) + "_inst";
+    std::string changedFlag = instName + "_eval_cache_changed";
+    std::string inRst = nt.get(fifo.getInRst());
+    std::string outRst = nt.get(fifo.getOutRst());
+    std::string inValid = nt.get(fifo.getInValid());
+    std::string inData = nt.get(fifo.getInData());
+    std::string outReady = nt.get(fifo.getOutReady());
+    os << indent << "#ifdef PYC_DISABLE_PRIMITIVE_EVAL_CACHE\n";
+    os << indent << instName << ".eval();\n";
+    os << indent << "if (_pyc_sim_stats_enable) _pyc_sim_stats.primitive_eval_calls++;\n";
+    if (!changedAnyVar.empty())
+      os << indent << changedAnyVar << " = true;\n";
+    os << indent << "#else\n";
+    os << indent << "bool " << changedFlag << " = !" << instName << "_eval_cache_valid;\n";
+    os << indent << "if (!" << changedFlag << " && (" << instName << "_eval_cache_in_rst != " << inRst << ")) "
+       << changedFlag << " = true;\n";
+    os << indent << "if (!" << changedFlag << " && (" << instName << "_eval_cache_out_rst != " << outRst << ")) "
+       << changedFlag << " = true;\n";
+    os << indent << "if (!" << changedFlag << " && (" << instName << "_eval_cache_in_valid != " << inValid
+       << ")) " << changedFlag << " = true;\n";
+    os << indent << "if (!" << changedFlag << " && (" << instName << "_eval_cache_in_data != " << inData
+       << ")) " << changedFlag << " = true;\n";
+    os << indent << "if (!" << changedFlag << " && (" << instName << "_eval_cache_out_ready != " << outReady
+       << ")) " << changedFlag << " = true;\n";
+    os << indent << "if (" << changedFlag << ") {\n";
+    os << indent << "  " << instName << ".eval();\n";
+    os << indent << "  if (_pyc_sim_stats_enable) _pyc_sim_stats.primitive_eval_calls++;\n";
+    os << indent << "} else {\n";
+    os << indent << "  if (_pyc_sim_stats_enable) _pyc_sim_stats.primitive_cache_skips++;\n";
+    os << indent << "}\n";
+    if (!changedAnyVar.empty())
+      os << indent << "if (" << changedFlag << ") " << changedAnyVar << " = true;\n";
+    os << indent << "if (" << changedFlag << ") {\n";
+    os << indent << "  " << instName << "_eval_cache_in_rst = " << inRst << ";\n";
+    os << indent << "  " << instName << "_eval_cache_out_rst = " << outRst << ";\n";
+    os << indent << "  " << instName << "_eval_cache_in_valid = " << inValid << ";\n";
+    os << indent << "  " << instName << "_eval_cache_in_data = " << inData << ";\n";
+    os << indent << "  " << instName << "_eval_cache_out_ready = " << outReady << ";\n";
+    os << indent << "}\n";
+    os << indent << instName << "_eval_cache_valid = true;\n";
+    os << indent << "#endif\n";
+  };
+
+  auto emitByteMemEvalWithCache =
+      [&](pyc::ByteMemOp mem, llvm::StringRef indent, llvm::StringRef changedAnyVar = llvm::StringRef()) {
+    std::string instName = byteMemInstName.lookup(mem.getOperation());
+    std::string changedFlag = instName + "_eval_cache_changed";
+    std::string rst = nt.get(mem.getRst());
+    std::string raddr = nt.get(mem.getRaddr());
+    std::string wvalid = nt.get(mem.getWvalid());
+    std::string waddr = nt.get(mem.getWaddr());
+    std::string wdata = nt.get(mem.getWdata());
+    std::string wstrb = nt.get(mem.getWstrb());
+    os << indent << "#ifdef PYC_DISABLE_PRIMITIVE_EVAL_CACHE\n";
+    os << indent << instName << ".eval();\n";
+    os << indent << "if (_pyc_sim_stats_enable) _pyc_sim_stats.primitive_eval_calls++;\n";
+    if (!changedAnyVar.empty())
+      os << indent << changedAnyVar << " = true;\n";
+    os << indent << "#else\n";
+    os << indent << "bool " << changedFlag << " = !" << instName << "_eval_cache_valid;\n";
+    os << indent << "if (!" << changedFlag << " && (" << instName << "_eval_cache_rst != " << rst << ")) "
+       << changedFlag << " = true;\n";
+    os << indent << "if (!" << changedFlag << " && (" << instName << "_eval_cache_raddr != " << raddr << ")) "
+       << changedFlag << " = true;\n";
+    os << indent << "if (!" << changedFlag << " && (" << instName << "_eval_cache_wvalid != " << wvalid << ")) "
+       << changedFlag << " = true;\n";
+    os << indent << "if (!" << changedFlag << " && (" << instName << "_eval_cache_waddr != " << waddr << ")) "
+       << changedFlag << " = true;\n";
+    os << indent << "if (!" << changedFlag << " && (" << instName << "_eval_cache_wdata != " << wdata << ")) "
+       << changedFlag << " = true;\n";
+    os << indent << "if (!" << changedFlag << " && (" << instName << "_eval_cache_wstrb != " << wstrb << ")) "
+       << changedFlag << " = true;\n";
+    os << indent << "if (" << changedFlag << ") {\n";
+    os << indent << "  " << instName << ".eval();\n";
+    os << indent << "  if (_pyc_sim_stats_enable) _pyc_sim_stats.primitive_eval_calls++;\n";
+    os << indent << "} else {\n";
+    os << indent << "  if (_pyc_sim_stats_enable) _pyc_sim_stats.primitive_cache_skips++;\n";
+    os << indent << "}\n";
+    if (!changedAnyVar.empty())
+      os << indent << "if (" << changedFlag << ") " << changedAnyVar << " = true;\n";
+    os << indent << "if (" << changedFlag << ") {\n";
+    os << indent << "  " << instName << "_eval_cache_rst = " << rst << ";\n";
+    os << indent << "  " << instName << "_eval_cache_raddr = " << raddr << ";\n";
+    os << indent << "  " << instName << "_eval_cache_wvalid = " << wvalid << ";\n";
+    os << indent << "  " << instName << "_eval_cache_waddr = " << waddr << ";\n";
+    os << indent << "  " << instName << "_eval_cache_wdata = " << wdata << ";\n";
+    os << indent << "  " << instName << "_eval_cache_wstrb = " << wstrb << ";\n";
+    os << indent << "}\n";
+    os << indent << instName << "_eval_cache_valid = true;\n";
+    os << indent << "#endif\n";
+  };
+
+  auto emitEvalNode =
+      [&](Operation *op, llvm::StringRef indent, llvm::StringRef changedAnyVar = llvm::StringRef()) -> LogicalResult {
+    if (auto fifo = dyn_cast<pyc::FifoOp>(*op)) {
+      emitFifoEvalWithCache(fifo, indent, changedAnyVar);
+      return success();
+    }
+    if (auto fifo = dyn_cast<pyc::AsyncFifoOp>(*op)) {
+      emitAsyncFifoEvalWithCache(fifo, indent, changedAnyVar);
+      return success();
+    }
+    if (auto mem = dyn_cast<pyc::ByteMemOp>(*op)) {
+      emitByteMemEvalWithCache(mem, indent, changedAnyVar);
+      return success();
+    }
+    if (auto inst = dyn_cast<pyc::InstanceOp>(*op)) {
+      auto it = instIndex.find(inst.getOperation());
+      if (it == instIndex.end())
+        return inst.emitError("internal error: missing instance metadata");
+      auto &ii = instInfos[it->second];
+      emitInstanceEvalWithCache(ii, indent, changedAnyVar);
+      return success();
+    }
+    if (auto a = dyn_cast<pyc::AssertOp>(*op)) {
+      std::string msg = "pyc.assert failed";
+      if (auto m = a.getMsgAttr())
+        msg = m.getValue().str();
+      os << indent << "if (!" << nt.get(a.getCond()) << ".toBool()) { std::cerr << " << cppStringLiteral(msg)
+         << " << \"\\n\"; std::abort(); }\n";
+      return success();
+    }
+    if (auto a = dyn_cast<pyc::AssignOp>(*op)) {
+      os << indent << nt.get(a.getDst()) << " = " << nt.get(a.getSrc()) << ";\n";
+      return success();
+    }
+    if (auto comb = dyn_cast<pyc::CombOp>(*op)) {
+      os << indent << "eval_comb_" << combIndex.lookup(comb.getOperation()) << "();\n";
+      return success();
+    }
+    if (isa<pyc::ConstantOp,
+            pyc::AddOp,
+            pyc::SubOp,
+            pyc::MulOp,
+            pyc::UdivOp,
+            pyc::UremOp,
+            pyc::SdivOp,
+            pyc::SremOp,
+            pyc::MuxOp,
+            pyc::AndOp,
+            pyc::OrOp,
+            pyc::XorOp,
+            pyc::NotOp,
+            pyc::ConcatOp,
+            pyc::AliasOp,
+            pyc::EqOp,
+            pyc::UltOp,
+            pyc::SltOp,
+            pyc::TruncOp,
+            pyc::ZextOp,
+            pyc::SextOp,
+            pyc::ExtractOp,
+            pyc::ShliOp,
+            pyc::LshriOp,
+            pyc::AshriOp,
+            arith::SelectOp>(*op)) {
+      if (failed(emitCombAssign(*op, os, nt)))
+        return failure();
+      return success();
+    }
+    return op->emitError("unsupported op for C++ emission: ") << op->getName();
+  };
+
+  struct SccCompPlan {
+    llvm::SmallVector<unsigned> nodes;
+    llvm::SmallVector<unsigned> succ;
+    unsigned indeg = 0;
+    std::string key;
+    bool cyclic = false;
+  };
+
+  auto buildEvalGraph = [&](llvm::SmallVector<Operation *> &nodes,
+                            llvm::SmallVector<std::string> &nodeKeys,
+                            llvm::SmallVector<llvm::SmallVector<unsigned>> &succ,
+                            llvm::SmallVector<unsigned> &indeg) -> bool {
+    nodes.clear();
+    nodeKeys.clear();
+    succ.clear();
+    indeg.clear();
+
+    llvm::DenseMap<Operation *, unsigned> nodeIndex;
+    for (Operation &op : top) {
+      if (isa<func::ReturnOp>(op) || isa<pyc::WireOp>(op) || isa<pyc::RegOp>(op) || isa<pyc::SyncMemOp>(op) ||
+          isa<pyc::SyncMemDPOp>(op) || isa<pyc::CdcSyncOp>(op))
+        continue;
+
+      unsigned idx = static_cast<unsigned>(nodes.size());
+      nodes.push_back(&op);
+      nodeIndex.try_emplace(&op, idx);
+      if (auto a = dyn_cast<pyc::AssignOp>(op))
+        nodeKeys.push_back(nt.get(a.getDst()));
+      else if (op.getNumResults() > 0)
+        nodeKeys.push_back(nt.get(op.getResult(0)));
+      else
+        nodeKeys.push_back(sanitizeId(op.getName().getStringRef()) + "_" + std::to_string(idx));
+    }
+
+    if (nodes.empty())
+      return false;
+
+    llvm::DenseMap<Value, unsigned> valueProducer;
+    llvm::DenseMap<Value, unsigned> wireAssign;
+    llvm::DenseMap<Value, unsigned> wireAssignCount;
+    for (auto it : llvm::enumerate(nodes)) {
+      unsigned idx = static_cast<unsigned>(it.index());
+      Operation *op = it.value();
+      for (Value r : op->getResults())
+        valueProducer.try_emplace(r, idx);
+      if (auto a = dyn_cast<pyc::AssignOp>(*op)) {
+        Value dst = a.getDst();
+        unsigned &cnt = wireAssignCount[dst];
+        cnt++;
+        if (cnt == 1)
+          wireAssign[dst] = idx;
+      }
+    }
+    for (auto &it : wireAssignCount) {
+      if (it.second > 1)
+        return false;
+    }
+    for (auto &it : wireAssign)
+      valueProducer[it.first] = it.second;
+
+    succ.assign(nodes.size(), {});
+    indeg.assign(nodes.size(), 0u);
+    for (auto it : llvm::enumerate(nodes)) {
+      unsigned idx = static_cast<unsigned>(it.index());
+      Operation *op = it.value();
+      llvm::SmallSet<unsigned, 8> deps;
+      auto addDep = [&](Value v) {
+        auto pIt = valueProducer.find(v);
+        if (pIt == valueProducer.end())
+          return;
+        unsigned p = pIt->second;
+        if (p == idx)
+          return;
+        deps.insert(p);
+      };
+      if (auto a = dyn_cast<pyc::AssignOp>(*op))
+        addDep(a.getSrc());
+      else
+        for (Value v : op->getOperands())
+          addDep(v);
+      indeg[idx] = static_cast<unsigned>(deps.size());
+      for (unsigned p : deps)
+        succ[p].push_back(idx);
+    }
+    return true;
+  };
+
+  llvm::SmallVector<Operation *> sccNodes;
+  llvm::SmallVector<std::string> sccNodeKeys;
+  llvm::SmallVector<llvm::SmallVector<unsigned>> sccSucc;
+  llvm::SmallVector<unsigned> sccIndeg;
+  llvm::SmallVector<SccCompPlan> sccPlans;
+  llvm::SmallVector<unsigned> sccCompOrder;
+  bool hasSccWorklistPlan = false;
+
+  if (buildEvalGraph(sccNodes, sccNodeKeys, sccSucc, sccIndeg)) {
+    std::vector<int> index(sccNodes.size(), -1);
+    std::vector<int> low(sccNodes.size(), 0);
+    std::vector<unsigned> stack;
+    std::vector<bool> inStack(sccNodes.size(), false);
+    llvm::SmallVector<unsigned> nodeToComp(sccNodes.size(), 0);
+    int nextIndex = 0;
+
+    std::function<void(unsigned)> strongconnect = [&](unsigned v) {
+      index[v] = nextIndex;
+      low[v] = nextIndex;
+      ++nextIndex;
+      stack.push_back(v);
+      inStack[v] = true;
+
+      for (unsigned w : sccSucc[v]) {
+        if (index[w] < 0) {
+          strongconnect(w);
+          low[v] = std::min(low[v], low[w]);
+        } else if (inStack[w]) {
+          low[v] = std::min(low[v], index[w]);
+        }
+      }
+
+      if (low[v] == index[v]) {
+        SccCompPlan comp;
+        while (!stack.empty()) {
+          unsigned w = stack.back();
+          stack.pop_back();
+          inStack[w] = false;
+          nodeToComp[w] = static_cast<unsigned>(sccPlans.size());
+          comp.nodes.push_back(w);
+          if (w == v)
+            break;
+        }
+        std::sort(comp.nodes.begin(), comp.nodes.end(), [&](unsigned a, unsigned b) { return sccNodeKeys[a] < sccNodeKeys[b]; });
+        comp.key = sccNodeKeys[comp.nodes.front()];
+        sccPlans.push_back(std::move(comp));
+      }
+    };
+
+    for (unsigned v = 0; v < sccNodes.size(); ++v)
+      if (index[v] < 0)
+        strongconnect(v);
+
+    llvm::SmallVector<llvm::SmallSet<unsigned, 8>> compSuccSet(sccPlans.size());
+    for (unsigned v = 0; v < sccNodes.size(); ++v) {
+      unsigned cv = nodeToComp[v];
+      for (unsigned w : sccSucc[v]) {
+        unsigned cw = nodeToComp[w];
+        if (cv == cw) {
+          if (v == w || sccPlans[cv].nodes.size() > 1)
+            sccPlans[cv].cyclic = true;
+          continue;
+        }
+        compSuccSet[cv].insert(cw);
+      }
+      if (sccPlans[cv].nodes.size() > 1)
+        sccPlans[cv].cyclic = true;
+    }
+
+    for (unsigned c = 0; c < sccPlans.size(); ++c) {
+      for (unsigned s : compSuccSet[c]) {
+        sccPlans[c].succ.push_back(s);
+        sccPlans[s].indeg++;
+      }
+      std::sort(sccPlans[c].succ.begin(), sccPlans[c].succ.end(),
+                [&](unsigned a, unsigned b) { return sccPlans[a].key < sccPlans[b].key; });
+    }
+
+    auto cmpComp = [&](unsigned a, unsigned b) { return sccPlans[a].key > sccPlans[b].key; };
+    std::vector<unsigned> heap;
+    for (unsigned i = 0; i < sccPlans.size(); ++i)
+      if (sccPlans[i].indeg == 0)
+        heap.push_back(i);
+    std::make_heap(heap.begin(), heap.end(), cmpComp);
+    while (!heap.empty()) {
+      std::pop_heap(heap.begin(), heap.end(), cmpComp);
+      unsigned c = heap.back();
+      heap.pop_back();
+      sccCompOrder.push_back(c);
+      for (unsigned s : sccPlans[c].succ) {
+        if (--sccPlans[s].indeg == 0) {
+          heap.push_back(s);
+          std::push_heap(heap.begin(), heap.end(), cmpComp);
+        }
+      }
+    }
+
+    if (sccCompOrder.size() == sccPlans.size()) {
+      for (const auto &comp : sccPlans) {
+        if (comp.cyclic) {
+          hasSccWorklistPlan = true;
+          break;
+        }
+      }
+    } else {
+      hasSccWorklistPlan = false;
+    }
+  }
 
   // eval(): attempt a single-pass topological netlist schedule; if the graph has
   // cycles, fall back to a small fixed-point iteration (legacy behavior).
-  os << "  void eval() {\n";
-  if (hasFullTopo) {
-    for (Operation *op : fullOrdered) {
-      if (auto fifo = dyn_cast<pyc::FifoOp>(*op)) {
-        os << "    " << nt.get(fifo.getInReady()) << "_inst.eval();\n";
-        continue;
-      }
-      if (auto fifo = dyn_cast<pyc::AsyncFifoOp>(*op)) {
-        os << "    " << nt.get(fifo.getInReady()) << "_inst.eval();\n";
-        continue;
-      }
-      if (auto mem = dyn_cast<pyc::ByteMemOp>(*op)) {
-        os << "    " << byteMemInstName.lookup(mem.getOperation()) << ".eval();\n";
-        continue;
-      }
-      if (auto inst = dyn_cast<pyc::InstanceOp>(*op)) {
-        auto it = instIndex.find(inst.getOperation());
-        if (it == instIndex.end())
-          return inst.emitError("internal error: missing instance metadata");
-        const auto &ii = instInfos[it->second];
-        emitInstanceEvalWithCache(ii, "    ");
-        continue;
-      }
-      if (auto a = dyn_cast<pyc::AssertOp>(*op)) {
-        std::string msg = "pyc.assert failed";
-        if (auto m = a.getMsgAttr())
-          msg = m.getValue().str();
-        os << "    if (!" << nt.get(a.getCond()) << ".toBool()) { std::cerr << " << cppStringLiteral(msg)
-           << " << \"\\n\"; std::abort(); }\n";
-        continue;
-      }
-      if (auto a = dyn_cast<pyc::AssignOp>(*op)) {
-        os << "    " << nt.get(a.getDst()) << " = " << nt.get(a.getSrc()) << ";\n";
-        continue;
-      }
-      if (auto comb = dyn_cast<pyc::CombOp>(*op)) {
-        os << "    eval_comb_" << combIndex.lookup(comb.getOperation()) << "();\n";
-        continue;
-      }
-      if (isa<pyc::ConstantOp,
-              pyc::AddOp,
-              pyc::SubOp,
-              pyc::MulOp,
-              pyc::UdivOp,
-              pyc::UremOp,
-              pyc::SdivOp,
-              pyc::SremOp,
-              pyc::MuxOp,
-              pyc::AndOp,
-              pyc::OrOp,
-              pyc::XorOp,
-              pyc::NotOp,
-              pyc::ConcatOp,
-              pyc::AliasOp,
-              pyc::EqOp,
-              pyc::UltOp,
-              pyc::SltOp,
-              pyc::TruncOp,
-              pyc::ZextOp,
-              pyc::SextOp,
-              pyc::ExtractOp,
-              pyc::ShliOp,
-              pyc::LshriOp,
-              pyc::AshriOp,
-              arith::SelectOp>(*op)) {
-        if (failed(emitCombAssign(*op, os, nt)))
-          return failure();
-        continue;
-      }
-      return op->emitError("unsupported op for C++ emission: ") << op->getName();
-    }
-  } else {
-    os << "    eval_comb_pass();\n";
-
+  if (!hasFullTopo) {
     unsigned numPrims = static_cast<unsigned>(instInfos.size() + fifos.size() + asyncFifos.size() + byteMems.size());
+
+    std::vector<std::string> primGroupMethods;
+    if (numPrims > 0) {
+      constexpr unsigned kPrimGroupSize = 64;
+      unsigned groupIdx = 0;
+      unsigned inGroup = 0;
+      auto openGroup = [&]() {
+        std::string methodName = "eval_prim_group_" + std::to_string(groupIdx++);
+        primGroupMethods.push_back(methodName);
+        os << "  inline void " << methodName << "(bool &_pyc_prim_changed) {\n";
+        inGroup = 0;
+      };
+      auto closeGroup = [&]() { os << "  }\n\n"; };
+      auto ensureGroup = [&]() {
+        if (primGroupMethods.empty() || inGroup >= kPrimGroupSize) {
+          if (!primGroupMethods.empty())
+            closeGroup();
+          openGroup();
+        }
+      };
+      auto bumpGroup = [&]() { ++inGroup; };
+
+      for (const auto &ii : instInfos) {
+        ensureGroup();
+        emitInstanceEvalWithCache(ii, "    ", "_pyc_prim_changed");
+        bumpGroup();
+      }
+      for (auto fifo : fifos) {
+        ensureGroup();
+        emitFifoEvalWithCache(fifo, "    ", "_pyc_prim_changed");
+        bumpGroup();
+      }
+      for (auto fifo : asyncFifos) {
+        ensureGroup();
+        emitAsyncFifoEvalWithCache(fifo, "    ", "_pyc_prim_changed");
+        bumpGroup();
+      }
+      for (auto mem : byteMems) {
+        ensureGroup();
+        emitByteMemEvalWithCache(mem, "    ", "_pyc_prim_changed");
+        bumpGroup();
+      }
+      if (!primGroupMethods.empty())
+        closeGroup();
+    }
+
+    os << "  inline void eval_legacy_fallback_path() {\n";
     if (numPrims > 0) {
       os << "    for (unsigned _i = 0; _i < " << numPrims << "u; ++_i) {\n";
-      for (const auto &ii : instInfos) {
-        emitInstanceEvalWithCache(ii, "      ");
-      }
-      for (auto fifo : fifos)
-        os << "      " << nt.get(fifo.getInReady()) << "_inst.eval();\n";
-      for (auto fifo : asyncFifos)
-        os << "      " << nt.get(fifo.getInReady()) << "_inst.eval();\n";
-      for (auto mem : byteMems)
-        os << "      " << byteMemInstName.lookup(mem.getOperation()) << ".eval();\n";
+      os << "      if (_pyc_sim_stats_enable) _pyc_sim_stats.fallback_iterations++;\n";
+      os << "      bool _pyc_prim_changed = false;\n";
+      for (const std::string &methodName : primGroupMethods)
+        os << "      " << methodName << "(_pyc_prim_changed);\n";
       os << "      eval_comb_pass();\n";
+      os << "      if (!_pyc_prim_changed) break;\n";
       os << "    }\n";
+    }
+    os << "  }\n\n";
+
+    if (hasSccWorklistPlan && numPrims > 0) {
+      std::vector<std::string> sccCompMethods;
+      sccCompMethods.reserve(sccCompOrder.size());
+      constexpr unsigned kSccNodeChunk = 256;
+      unsigned compOrdinal = 0;
+      for (unsigned c : sccCompOrder) {
+        const auto &comp = sccPlans[c];
+        std::string methodName = "eval_scc_comp_" + std::to_string(compOrdinal++);
+        std::vector<std::string> partMethods;
+        partMethods.reserve((comp.nodes.size() + kSccNodeChunk - 1) / kSccNodeChunk);
+
+        for (size_t begin = 0, partIdx = 0; begin < comp.nodes.size(); begin += kSccNodeChunk, ++partIdx) {
+          size_t end = std::min(comp.nodes.size(), begin + static_cast<size_t>(kSccNodeChunk));
+          std::string partName = methodName + "_part_" + std::to_string(partIdx);
+          partMethods.push_back(partName);
+          if (comp.cyclic) {
+            os << "  inline void " << partName << "(bool &_pyc_prim_changed) {\n";
+            for (size_t i = begin; i < end; ++i)
+              if (failed(emitEvalNode(sccNodes[comp.nodes[i]], "    ", "_pyc_prim_changed")))
+                return failure();
+          } else {
+            os << "  inline void " << partName << "() {\n";
+            for (size_t i = begin; i < end; ++i)
+              if (failed(emitEvalNode(sccNodes[comp.nodes[i]], "    ")))
+                return failure();
+          }
+          os << "  }\n\n";
+        }
+
+        sccCompMethods.push_back(methodName);
+        os << "  inline void " << methodName << "() {\n";
+        if (comp.cyclic) {
+          unsigned iterCap = std::max(2u, numPrims + static_cast<unsigned>(comp.nodes.size()) + 2u);
+          os << "    bool _pyc_converged = false;\n";
+          os << "    for (unsigned _pyc_iter = 0; _pyc_iter < " << iterCap << "u; ++_pyc_iter) {\n";
+          os << "      if (_pyc_sim_stats_enable) _pyc_sim_stats.fallback_iterations++;\n";
+          os << "      bool _pyc_prim_changed = false;\n";
+          for (const std::string &partName : partMethods)
+            os << "      " << partName << "(_pyc_prim_changed);\n";
+          os << "      if (!_pyc_prim_changed) { _pyc_converged = true; break; }\n";
+          os << "    }\n";
+          os << "    if (!_pyc_converged) {\n";
+          os << "      std::cerr << \"pyc SCC fallback failed to converge\" << \"\\n\";\n";
+          os << "      std::abort();\n";
+          os << "    }\n";
+        } else {
+          for (const std::string &partName : partMethods)
+            os << "    " << partName << "();\n";
+        }
+        os << "  }\n\n";
+      }
+
+      os << "  inline void eval_fast_scc_path() {\n";
+      for (const std::string &methodName : sccCompMethods)
+        os << "    " << methodName << "();\n";
+      os << "  }\n\n";
+    }
+  }
+
+  os << "  void eval() {\n";
+  if (hasFullTopo) {
+    for (Operation *op : fullOrdered)
+      if (failed(emitEvalNode(op, "    ")))
+        return failure();
+  } else {
+    os << "    eval_comb_pass();\n";
+    unsigned numPrims = static_cast<unsigned>(instInfos.size() + fifos.size() + asyncFifos.size() + byteMems.size());
+    if (hasSccWorklistPlan && numPrims > 0) {
+      os << "    if (_pyc_sim_fast_enable) {\n";
+      os << "      #ifndef PYC_DISABLE_SCC_WORKLIST_EVAL\n";
+      os << "      eval_fast_scc_path();\n";
+      os << "      #else\n";
+      os << "      eval_legacy_fallback_path();\n";
+      os << "      #endif\n";
+      os << "    } else {\n";
+      os << "      eval_legacy_fallback_path();\n";
+      os << "    }\n";
+    } else {
+      os << "    eval_legacy_fallback_path();\n";
     }
   }
 
@@ -1086,7 +1879,7 @@ static LogicalResult emitFunc(func::FuncOp f, llvm::raw_ostream &os) {
   }
   os << "    // Local sequential primitives.\n";
   for (auto r : regs)
-    os << "    " << nt.get(r.getQ()) << "_inst.tick_compute();\n";
+    os << "    " << nt.get(r.getQ()) << "_inst->tick_compute();\n";
   for (auto fifo : fifos)
     os << "    " << nt.get(fifo.getInReady()) << "_inst.tick_compute();\n";
   for (auto mem : byteMems)
@@ -1109,7 +1902,7 @@ static LogicalResult emitFunc(func::FuncOp f, llvm::raw_ostream &os) {
   }
   os << "    // Local sequential primitives.\n";
   for (auto r : regs)
-    os << "    " << nt.get(r.getQ()) << "_inst.tick_commit();\n";
+    os << "    " << nt.get(r.getQ()) << "_inst->tick_commit();\n";
   for (auto fifo : fifos)
     os << "    " << nt.get(fifo.getInReady()) << "_inst.tick_commit();\n";
   for (auto mem : byteMems)
@@ -1123,10 +1916,19 @@ static LogicalResult emitFunc(func::FuncOp f, llvm::raw_ostream &os) {
   for (auto s : cdcSyncs)
     os << "    " << nt.get(s.getOut()) << "_inst.tick_commit();\n";
   if (!instInfos.empty()) {
-    os << "    // Sequential state changed: force re-eval on next eval() call.\n";
-    for (const auto &ii : instInfos)
-      os << "    " << ii.member << "_eval_cache_valid = false;\n";
+    os << "    // Force re-eval on next eval() only for stateful sub-modules.\n";
+    for (unsigned i = 0; i < instInfos.size(); ++i) {
+      if (i < instHasSequentialCallee.size() && instHasSequentialCallee[i]) {
+        os << "    " << instInfos[i].member << "_eval_cache_valid = false;\n";
+      }
+    }
   }
+  for (auto fifo : fifos)
+    os << "    " << nt.get(fifo.getInReady()) << "_inst_eval_cache_valid = false;\n";
+  for (auto mem : byteMems)
+    os << "    " << byteMemInstName.lookup(mem.getOperation()) << "_eval_cache_valid = false;\n";
+  for (auto fifo : asyncFifos)
+    os << "    " << nt.get(fifo.getInReady()) << "_inst_eval_cache_valid = false;\n";
   os << "  }\n\n";
 
   // tick(): back-compat wrapper.
@@ -1144,7 +1946,10 @@ static LogicalResult emitFunc(func::FuncOp f, llvm::raw_ostream &os) {
 LogicalResult emitCpp(ModuleOp module, llvm::raw_ostream &os, const CppEmitterOptions &) {
   os << "// pyCircuit C++ emission (prototype)\n";
   os << "#include <cstdlib>\n";
+  os << "#include <cstdint>\n";
+  os << "#include <fstream>\n";
   os << "#include <iostream>\n";
+  os << "#include <string>\n";
   os << "#include <cpp/pyc_sim.hpp>\n\n";
   os << "namespace pyc::gen {\n\n";
 
