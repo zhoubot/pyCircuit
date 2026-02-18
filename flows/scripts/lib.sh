@@ -22,6 +22,9 @@ pyc_find_pyc_compile() {
   fi
 
   local candidates=(
+    # Preferred: current MLIR build dir.
+    "${PYC_ROOT_DIR}/compiler/mlir/build2/bin/pyc-compile"
+    # Legacy build dirs (kept for backwards compatibility).
     "${PYC_ROOT_DIR}/build/bin/pyc-compile"
     "${PYC_ROOT_DIR}/compiler/mlir/build/bin/pyc-compile"
     "${PYC_ROOT_DIR}/build-top/bin/pyc-compile"
