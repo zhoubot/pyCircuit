@@ -1135,11 +1135,6 @@ int main(int argc, char **argv) {
               return 1;
             if (!coreMethods.empty())
               wroteAny = true;
-            // tick methods can be enormous for large top-level modules (e.g. JanusBccBackendCompat).
-            // Allow sharding to avoid compiler instability/timeouts on a single huge TU.
-            if (failed(writeMaybeShardedMethods("tick", "tick", tickMethods, /*allowSharding=*/true)))
-              return 1;
-
             auto writeMaybeShardedMethods = [&](llvm::StringRef stem,
                                                 llvm::StringRef kind,
                                                 llvm::ArrayRef<const SplitMethodDef *> defs,
@@ -1199,6 +1194,11 @@ int main(int argc, char **argv) {
               }
               return flushShard();
             };
+
+            // tick methods can be enormous for large top-level modules (e.g. JanusBccBackendCompat).
+            // Allow sharding to avoid compiler instability/timeouts on a single huge TU.
+            if (failed(writeMaybeShardedMethods("tick", "tick", tickMethods, /*allowSharding=*/true)))
+              return 1;
 
             if (failed(writeMaybeShardedMethods("eval", "eval", evalMethods, /*allowSharding=*/true)))
               return 1;
