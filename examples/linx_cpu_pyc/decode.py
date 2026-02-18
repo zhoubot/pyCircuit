@@ -66,6 +66,7 @@ from .isa import (
     OP_B_IOT,
     OP_B_IOTI,
     OP_B_IOR,
+    OP_HL_SSRSET,
     OP_HL_LB_PCR,
     OP_HL_LBU_PCR,
     OP_HL_LD_PCR,
@@ -147,6 +148,7 @@ from .isa import (
     OP_SUBI,
     OP_SUBIW,
     OP_SUBW,
+    OP_SSRSET,
     OP_SWI,
     OP_XORW,
     REG_INVALID,
@@ -398,6 +400,20 @@ def decode_window(m: Circuit, window: Wire) -> Decode:
         len_bytes = 2
         imm = simm12_s64_c.shl(amount=1)
 
+    # C.BSTART.{SYS,MPAR,MSEQ,VPAR,VSEQ} FALL fixed forms.
+    # pyCircuit models these as standard fall-through block starts.
+    cond = in16 & (
+        masked_eq(insn16, mask=0xFFFF, match=0x0840)
+        | masked_eq(insn16, mask=0xFFFF, match=0x08C0)
+        | masked_eq(insn16, mask=0xFFFF, match=0x48C0)
+        | masked_eq(insn16, mask=0xFFFF, match=0x88C0)
+        | masked_eq(insn16, mask=0xFFFF, match=0xC8C0)
+    )
+    if cond:
+        op = OP_C_BSTART_STD
+        len_bytes = 2
+        imm = 0
+
     cond = in16 & masked_eq(insn16, mask=0xC7FF, match=0x0000)
     if cond:
         op = OP_C_BSTART_STD
@@ -471,33 +487,59 @@ def decode_window(m: Circuit, window: Wire) -> Decode:
         srcr = rs2_32
         imm = srcp_32.zext(width=64)  # size reg index
 
-    # Decoupled tile headers (bring-up subset): BSTART.TMA.
-    # Match the low 15 bits of known encodings (TLOAD/TSTORE variants share it).
-    cond = in32 & masked_eq(insn32, mask=0x00007FFF, match=0x00001181)
+    # Decoupled/tile/vector headers.
+    # The pyc core currently reuses one decoupled-header control path (OP_BSTART_TMA)
+    # for these header families.
+    cond = in32 & masked_eq(insn32, mask=0x060FFFFF, match=0x00011181)  # BSTART.TMA
+    if cond:
+        op = OP_BSTART_TMA
+        len_bytes = 4
+
+    cond = in32 & masked_eq(insn32, mask=0xFBFFFFFF, match=0x00001181)  # BSTART.MPAR
+    if cond:
+        op = OP_BSTART_TMA
+        len_bytes = 4
+
+    cond = in32 & masked_eq(insn32, mask=0xFBFFFFFF, match=0x00009181)  # BSTART.MSEQ
+    if cond:
+        op = OP_BSTART_TMA
+        len_bytes = 4
+
+    cond = in32 & masked_eq(insn32, mask=0xFBFFFFFF, match=0x00021181)  # BSTART.VPAR
+    if cond:
+        op = OP_BSTART_TMA
+        len_bytes = 4
+
+    cond = in32 & masked_eq(insn32, mask=0xFBFFFFFF, match=0x00029181)  # BSTART.VSEQ
+    if cond:
+        op = OP_BSTART_TMA
+        len_bytes = 4
+
+    cond = in32 & masked_eq(insn32, mask=0x060FFFFF, match=0x00031181)  # BSTART.CUBE
     if cond:
         op = OP_BSTART_TMA
         len_bytes = 4
 
     # Decoupled body pointer: B.TEXT (simm25 in halfwords; target = PC + (simm25 << 1)).
-    # simm25 occupies bits[31:7].
-    cond = in32 & masked_eq(insn32, mask=0x0000707F, match=0x00001003)
+    # QEMU metadata: mask=0x7f, match=0x03.
+    cond = in32 & masked_eq(insn32, mask=0x0000007F, match=0x00000003)
     if cond:
         op = OP_B_TEXT
         len_bytes = 4
         imm = insn32[7:32].sext(width=64)
 
     # Tile header descriptors: B.IOT/B.IOTI/B.IOR.
-    cond = in32 & masked_eq(insn32, mask=0x0000707F, match=0x00004013)
+    cond = in32 & masked_eq(insn32, mask=0x0000607F, match=0x00004013)
     if cond:
         op = OP_B_IOT
         len_bytes = 4
 
-    cond = in32 & masked_eq(insn32, mask=0x0000707F, match=0x00006013)
+    cond = in32 & masked_eq(insn32, mask=0x0000607F, match=0x00006013)
     if cond:
         op = OP_B_IOTI
         len_bytes = 4
 
-    cond = in32 & masked_eq(insn32, mask=0x0000707F, match=0x00000013)
+    cond = in32 & masked_eq(insn32, mask=0x0600707F, match=0x00000013)
     if cond:
         op = OP_B_IOR
         len_bytes = 4
@@ -1343,6 +1385,14 @@ def decode_window(m: Circuit, window: Wire) -> Decode:
         srcr = rs2_32
         srcr_type = srcr_type_32
 
+    # SSRSET: write SrcL to SSR_ID (base 32-bit form).
+    cond = in32 & masked_eq(insn32, mask=0x00007FFF, match=0x0000103B)
+    if cond:
+        op = OP_SSRSET
+        len_bytes = 4
+        srcl = rs1_32
+        imm = insn32[20:32].zext(width=64)
+
     cond = in32 & masked_eq(insn32, mask=0xF0FFFFFF, match=0x0010102B)
     if cond:
         op = OP_EBREAK
@@ -1399,6 +1449,16 @@ def decode_window(m: Circuit, window: Wire) -> Decode:
         op = OP_BSTART_STD_CALL
         len_bytes = 6
         imm = hl_bstart_off
+
+    # HL.SSRSET: write SrcL to extended SSR_ID.
+    cond = is_hl & masked_eq(insn48, mask=0x00007FFF000F, match=0x0000103B000E)
+    if cond:
+        op = OP_HL_SSRSET
+        len_bytes = 6
+        srcl = main32[15:20]
+        imm_hi12 = pfx16[4:16].zext(width=64)
+        imm_lo12 = main32[20:32].zext(width=64)
+        imm = imm_hi12.shl(amount=12) | imm_lo12
 
     # HL.<load>.PCR: PC-relative load, funct3 encodes width/signedness.
     cond = is_hl & masked_eq(insn48, mask=0x0000007F000F, match=0x00000039000E)

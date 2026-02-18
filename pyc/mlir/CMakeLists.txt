@@ -94,7 +94,7 @@ target_link_libraries(pyc_transforms PUBLIC
 # Build script uses "ninja pyc-compile" only so pyc-opt is optional; if you run
 # "ninja" (all), pyc-opt may fail to link on some systems.
 if(TARGET MLIRRegisterAllPasses)
-  add_executable(pyc-opt tools/pyc-opt.cpp EXCLUDE_FROM_ALL)
+  add_executable(pyc-opt EXCLUDE_FROM_ALL tools/pyc-opt.cpp)
   set_target_properties(pyc-opt PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
   llvm_update_compile_flags(pyc-opt)
   target_include_directories(pyc-opt PRIVATE
