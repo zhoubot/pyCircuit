@@ -139,7 +139,21 @@ def _eval_call_args(node: ast.Call, *, eval_expr: Any) -> tuple[list[Any], dict[
     return args, kwargs
 
 
+def _template_meta_value(v: Any) -> Any | None:
+    fn = getattr(v, "__pyc_template_value__", None)
+    if not callable(fn):
+        return None
+    try:
+        rep = fn()
+    except Exception as e:  # noqa: BLE001
+        raise JitError(f"template meta value provider failed for {type(v).__name__}: {e}") from e
+    return rep
+
+
 def _template_identity_snapshot(v: Any) -> Hashable:
+    rep = _template_meta_value(v)
+    if rep is not None:
+        return ("meta", type(v).__name__, _template_identity_snapshot(rep))
     if isinstance(v, LiteralValue):
         w = int(v.width) if v.width is not None else None
         s = bool(v.signed) if v.signed is not None else None
@@ -182,6 +196,10 @@ def _template_identity_snapshot(v: Any) -> Hashable:
 
 
 def _validate_template_return(v: Any, *, where: str = "return") -> None:
+    rep = _template_meta_value(v)
+    if rep is not None:
+        _validate_template_return(rep, where=f"{where}.__pyc_template_value__()")
+        return
     if v is None or isinstance(v, (bool, int, str, LiteralValue)):
         return
     if isinstance(v, (Wire, Reg, Signal, Connector, ConnectorBundle, Bundle, Vec)):
@@ -1013,18 +1031,36 @@ class _Compiler:
         return None
 
     def _snapshot_template_purity_state(self) -> dict[str, Any]:
-        return {
+        snap: dict[str, Any] = {
             "lines": list(self.m._lines),  # noqa: SLF001
             "next_tmp": int(self.m._next_tmp),  # noqa: SLF001
             "args": list(self.m._args),  # noqa: SLF001
             "results": list(self.m._results),  # noqa: SLF001
+            "finalizers": list(getattr(self.m, "_finalizers", [])),  # noqa: SLF001
+            "indent_level": int(getattr(self.m, "_indent_level", 0)),  # noqa: SLF001
+            "func_attrs": dict(getattr(self.m, "_func_attrs", {})),  # noqa: SLF001
         }
+        if hasattr(self.m, "_scope_stack"):
+            snap["scope_stack"] = list(getattr(self.m, "_scope_stack"))  # noqa: SLF001
+        if hasattr(self.m, "_debug_exports"):
+            snap["debug_exports"] = dict(getattr(self.m, "_debug_exports"))  # noqa: SLF001
+        return snap
 
     def _restore_template_purity_state(self, snap: Mapping[str, Any]) -> None:
         self.m._lines = list(snap["lines"])  # noqa: SLF001
         self.m._next_tmp = int(snap["next_tmp"])  # noqa: SLF001
         self.m._args = list(snap["args"])  # noqa: SLF001
         self.m._results = list(snap["results"])  # noqa: SLF001
+        if hasattr(self.m, "_finalizers"):
+            self.m._finalizers = list(snap.get("finalizers", []))  # noqa: SLF001
+        if hasattr(self.m, "_indent_level"):
+            self.m._indent_level = int(snap.get("indent_level", 0))  # noqa: SLF001
+        if hasattr(self.m, "_func_attrs"):
+            self.m._func_attrs = dict(snap.get("func_attrs", {}))  # noqa: SLF001
+        if hasattr(self.m, "_scope_stack"):
+            self.m._scope_stack = list(snap.get("scope_stack", []))  # noqa: SLF001
+        if hasattr(self.m, "_debug_exports"):
+            self.m._debug_exports = dict(snap.get("debug_exports", {}))  # noqa: SLF001
 
     def _template_purity_mutations(self, snap: Mapping[str, Any]) -> list[str]:
         changed: list[str] = []
@@ -1036,6 +1072,16 @@ class _Compiler:
             changed.append("_args")
         if list(self.m._results) != list(snap["results"]):  # noqa: SLF001
             changed.append("_results")
+        if list(getattr(self.m, "_finalizers", [])) != list(snap.get("finalizers", [])):  # noqa: SLF001
+            changed.append("_finalizers")
+        if int(getattr(self.m, "_indent_level", 0)) != int(snap.get("indent_level", 0)):  # noqa: SLF001
+            changed.append("_indent_level")
+        if dict(getattr(self.m, "_func_attrs", {})) != dict(snap.get("func_attrs", {})):  # noqa: SLF001
+            changed.append("_func_attrs")
+        if hasattr(self.m, "_scope_stack") and list(getattr(self.m, "_scope_stack")) != list(snap.get("scope_stack", [])):  # noqa: SLF001
+            changed.append("_scope_stack")
+        if hasattr(self.m, "_debug_exports") and dict(getattr(self.m, "_debug_exports")) != dict(snap.get("debug_exports", {})):  # noqa: SLF001
+            changed.append("_debug_exports")
         return changed
 
     def _eval_template_call(self, fn: Any, *, args: list[Any], kwargs: dict[str, Any]) -> Any:

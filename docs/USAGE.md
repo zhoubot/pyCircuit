@@ -1,154 +1,72 @@
-# pyCircuit v3.1 Usage
+# pyCircuit v3.2 Usage
 
-This is the canonical frontend authoring guide for v3.1.
+## 1) Required contracts
 
-## 1) Required authoring contracts
-
-- Top entrypoint must be:
-
-```python
-@module
-def build(m: Circuit, ...):
-    ...
-```
-
-- Helper calls in design/JIT context must be explicitly marked:
-  - `@module` for hierarchy boundaries
-  - `@function` for inline hardware helpers
-  - `@template` for compile-time pure helpers
-
-- Inter-module boundaries must use connectors. Raw `Wire`/`Reg` across module boundaries are rejected.
+- Top entrypoint must be `@module`.
+- Helper logic must be explicitly tagged as `@function` or `@template`.
+- Inter-module links must use connectors.
 
 ## 2) Decorators
 
-## `@module`
+- `@module`: hierarchy-preserving boundary
+- `@function`: inline hardware helper
+- `@template`: compile-time pure helper; may not emit IR or mutate module interface state
 
-- Creates a hierarchy boundary.
-- Lowered as callable module symbols + `pyc.instance` at call sites.
-- Default non-inline.
-- Supports specialization parameters and multiple instances.
+## 3) Connector APIs
 
-## `@function`
+Core connector methods on `Circuit`:
+- `input_connector`, `output_connector`, `reg_connector`, `bundle_connector`, `as_connector`, `connect`
 
-- Inline helper for hardware logic.
-- Lowered in frontend/MLIR call path and inlined by pipeline rules.
-- Use for reusable hardware expressions/mini-stages where hierarchy is not needed.
+Instance APIs:
+- `instance(...)`
+- `instance_handle(...)`
+- `instance_bind(...)` (v3.2 grammar-candy)
 
-## `@template`
+## 4) Compile-time helpers
 
-- Compile-time metaprogramming helper.
-- Evaluated during JIT.
-- Must be pure: cannot emit IR or mutate module interfaces.
-- Allowed returns: `None`, `bool`, `int`, `str`, `LiteralValue`, and container compositions of these.
-- Disallowed returns: `Wire`, `Reg`, `Signal`, connectors, modules, arbitrary objects.
+### `ct`
 
-See `/Users/zhoubot/pyCircuit/docs/TEMPLATE_METAPROGRAMMING.md` for details.
+Arithmetic helpers include:
+- `clog2`, `flog2`, `div_ceil`, `align_up`, `pow2_ceil`, `bitmask`
+- `is_pow2`, `pow2_floor`, `gcd`, `lcm`, `clamp`, `wrap_inc`, `wrap_dec`, `slice_width`, `bits_for_enum`, `onehot`, `decode_mask`
 
-## 3) Connectors
+### `meta`
 
-Main types:
-- `Connector`
-- `WireConnector`
-- `RegConnector`
-- `ConnectorBundle`
-- `ModuleInstanceHandle`
+`pycircuit.meta` includes immutable template data structures and builders:
+- `FieldSpec`, `BundleSpec`, `InterfaceSpec`, `StagePipeSpec`
+- `ParamSpec`, `ParamSet`, `ParamSpace`, `DecodeRule`
+- Builders: `bundle(...)`, `iface(...)`, `stage_pipe(...)`, `params(...)`, `ruleset(...)`
+- Wiring helpers: `declare_inputs`, `declare_outputs`, `declare_state_regs`, `bind_instance_ports`, `connect_like`
+- DSE helpers: `meta.dse.grid`, `meta.dse.product`, `meta.dse.filter`, `meta.dse.named_variant`
 
-Common APIs on `Circuit`:
-- `m.input_connector(...)`
-- `m.output_connector(...)`
-- `m.reg_connector(...)`
-- `m.bundle_connector(...)`
-- `m.as_connector(value, name=...)`
-- `m.connect(dst, src, when=...)`
+## 5) v3.2 grammar-candy methods
 
-Instantiation:
-- `m.instance(fn, name=..., params=..., port_name=connector, ...)`
-- Returns a connector for single-output modules or a `ConnectorBundle` for multi-output modules.
+- `m.io_in(spec, prefix=...)`
+- `m.io_out(spec, values, prefix=...)`
+- `m.state_regs(spec, clk=..., rst=..., prefix=..., init=..., en=...)`
+- `m.pipe_regs(stage_spec, in_bundle, clk=..., rst=..., en=..., flush=...)`
+- `m.instance_bind(fn, name=..., spec_bindings=..., params=...)`
 
-## 4) Compile-time arithmetic helpers (`ct`)
-
-Use `/Users/zhoubot/pyCircuit/compiler/frontend/pycircuit/ct.py` via `from pycircuit import ct`.
-
-Available helpers:
-- `ct.clog2(n)`
-- `ct.flog2(n)`
-- `ct.div_ceil(a, b)`
-- `ct.align_up(v, a)`
-- `ct.pow2_ceil(n)`
-- `ct.bitmask(width)`
-
-## 5) Minimal example
+## 6) Minimal example
 
 ```python
-from pycircuit import Circuit, compile_design, ct, module, function, template, u
+from pycircuit import Circuit, compile_design, meta, module, template
 
 @template
-def acc_width(m: Circuit, lanes: int, width: int) -> int:
+def lane_spec(m: Circuit, width: int):
     _ = m
-    return int(width) + ct.clog2(max(1, int(lanes)))
-
-@function
-def add_sat(m: Circuit, a, b):
-    s = a + b
-    return s[0:a.width]
+    return meta.bundle("lane").field("data", width=width).field("valid", width=1).build()
 
 @module
-def build(m: Circuit, lanes: int = 4, width: int = 16):
-    w = acc_width(m, lanes, width)
-    a = m.input("a", width=w)
-    b = m.input("b", width=w)
-    y = add_sat(m, a, b)
-    m.output("y", y)
+def build(m: Circuit, width: int = 32):
+    spec = lane_spec(m, width)
+    inp = m.io_in(spec, prefix="in_")
+    m.io_out(spec, {"data": inp["data"], "valid": inp["valid"]}, prefix="out_")
 
-if __name__ == "__main__":
-    print(compile_design(build, name="demo", lanes=4, width=16).emit_mlir())
+print(compile_design(build, name="demo").emit_mlir())
 ```
 
-## 6) CLI flow
+## 7) Fresh-start policy
 
-Emit MLIR:
-
-```bash
-PYTHONPATH=compiler/frontend python3 -m pycircuit.cli emit \
-  designs/examples/template_arith_demo.py \
-  -o /tmp/template_arith_demo.pyc
-```
-
-Compile split C++:
-
-```bash
-build/bin/pyc-compile /tmp/template_arith_demo.pyc \
-  --emit=cpp --out-dir /tmp/template_arith_demo_cpp --cpp-split=module
-```
-
-Compile split Verilog:
-
-```bash
-build/bin/pyc-compile /tmp/template_arith_demo.pyc \
-  --emit=verilog --out-dir /tmp/template_arith_demo_v
-```
-
-## 7) High-level blocks
-
-Public blocks in v3+ surface:
-- `FIFO`
-- `Queue`
-- `IssueQueue`
-- `Picker`
-- `Mem2Port`
-- `SRAM`
-- `RegFile`
-- `Cache`
-
-Use these as composite `@module` building blocks with connectors between instances.
-
-## 8) Fresh-start policy
-
-v3.1 is a hard break. Compatibility/migration shims are intentionally removed.
-
-Not supported:
-- inline alias decorator (removed)
-- public compile alias (removed)
-- non-JIT build fallback paths (removed)
-
-Use `python3 /Users/zhoubot/pyCircuit/flows/tools/check_api_hygiene.py` to enforce repository-wide API hygiene.
+v3+ is a hard break. Removed APIs (for example `jit_inline`, public `compile`) are not supported.
+Use `/Users/zhoubot/pyCircuit/flows/tools/check_api_hygiene.py` to enforce source/docs hygiene.

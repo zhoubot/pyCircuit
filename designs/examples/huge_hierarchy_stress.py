@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from pycircuit import Cache, Circuit, Connector, compile_design, ct, function, module, template, u
+from pycircuit import Cache, Circuit, Connector, compile_design, ct, function, meta, module, template, u
 
 
 @function
@@ -12,6 +12,13 @@ def _mix3(m: Circuit, a, b, c):
 
 
 @template
+def _lane_pipe_spec(m: Circuit, *, width: int):
+    _ = m
+    payload = meta.bundle("lane_payload").field("data", width=width).build()
+    return meta.stage_pipe("lane_pipe", payload=payload, has_valid=True, has_ready=False)
+
+
+@template
 def _stress_cfg(
     m: Circuit,
     *,
@@ -20,14 +27,25 @@ def _stress_cfg(
     fanout: int,
     cache_ways: int,
     cache_sets: int,
-) -> tuple[int, int, int, int, int]:
+):
     _ = m
-    nmods = max(1, int(module_count))
-    depth = max(0, int(hierarchy_depth))
-    fan = max(1, int(fanout))
-    ways = max(1, int(cache_ways))
-    sets = max(1, int(cache_sets))
-    return (nmods, depth, fan, ways, sets)
+    spec = (
+        meta.params()
+        .add("module_count", default=16, min_value=1)
+        .add("hierarchy_depth", default=2, min_value=0)
+        .add("fanout", default=2, min_value=1)
+        .add("cache_ways", default=4, min_value=1)
+        .add("cache_sets", default=64, min_value=1)
+    )
+    return spec.build(
+        {
+            "module_count": int(module_count),
+            "hierarchy_depth": int(hierarchy_depth),
+            "fanout": int(fanout),
+            "cache_ways": int(cache_ways),
+            "cache_sets": int(cache_sets),
+        }
+    )
 
 
 @module(structural=True)
@@ -35,9 +53,24 @@ def _leaf(m: Circuit, clk, rst, x, *, width: int = 64):
     clk_v = clk.read() if isinstance(clk, Connector) else clk
     rst_v = rst.read() if isinstance(rst, Connector) else rst
     x_v = x.read() if isinstance(x, Connector) else x
+
+    clk_c = m.as_connector(clk_v, name="clk")
+    rst_c = m.as_connector(rst_v, name="rst")
+    ps = _lane_pipe_spec(m, width=width)
+    staged = m.pipe_regs(
+        ps,
+        m.bundle_connector(
+            data=m.as_connector(x_v, name="data"),
+            valid=m.as_connector(u(1, 1), name="valid"),
+        ),
+        clk=clk_c,
+        rst=rst_c,
+        prefix="leaf_stg_",
+    )
+
     acc = m.out("acc", clk=clk_v, rst=rst_v, width=width, init=u(width, 0))
-    nxt = _mix3(m, acc.out(), x_v, acc.out().lshr(amount=1))
-    acc.set(nxt)
+    nxt = _mix3(m, acc.out(), staged["data"].read(), acc.out().lshr(amount=1))
+    acc.set(nxt, when=staged["valid"].read())
     m.output("y", acc)
 
 
@@ -56,10 +89,7 @@ def _node(
     clk_c = m.as_connector(clk, name="clk")
     rst_c = m.as_connector(rst, name="rst")
 
-    fan = int(fanout)
-    if fan <= 0:
-        fan = 1
-
+    fan = max(1, int(fanout))
     children = []
     for i in range(fan):
         xin = (x_v + u(width, i + 1))[0:width]
@@ -90,12 +120,13 @@ def build(
 ):
     clk = m.clock("clk")
     rst = m.reset("rst")
-    seed = m.input("seed", width=width)
-
     clk_c = m.as_connector(clk, name="clk")
     rst_c = m.as_connector(rst, name="rst")
 
-    nmods, depth_cfg, fan_cfg, ways_cfg, sets_cfg = _stress_cfg(
+    in_spec = meta.bundle("top_in").field("seed", width=width).build()
+    top_in = m.io_in(in_spec, prefix="")
+
+    cfg = _stress_cfg(
         m,
         module_count=module_count,
         hierarchy_depth=hierarchy_depth,
@@ -104,8 +135,14 @@ def build(
         cache_sets=cache_sets,
     )
 
-    cur = m.as_connector(seed, name="seed")
-    for i in range(nmods):
+    nmods = int(cfg["module_count"])
+    depth_cfg = int(cfg["hierarchy_depth"])
+    fan_cfg = int(cfg["fanout"])
+    ways_cfg = int(cfg["cache_ways"])
+    sets_cfg = int(cfg["cache_sets"])
+
+    cur = top_in["seed"]
+    for _ in range(nmods):
         cur = _node(
             m,
             clk=clk_c,
@@ -137,7 +174,9 @@ def build(
 
     hit_mask = u(width, 1) if cache["resp_hit"].read() else u(width, 0)
     out_v = _mix3(m, cur.read(), cache["resp_data"].read(), hit_mask)
-    m.output("out", out_v)
+
+    out_spec = meta.bundle("top_out").field("out", width=width).build()
+    m.io_out(out_spec, {"out": out_v}, prefix="")
 
 
 if __name__ == "__main__":

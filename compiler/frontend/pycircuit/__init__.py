@@ -1,4 +1,5 @@
 from . import ct
+from . import meta
 from .blocks import Cache, FIFO, IssueQueue, Mem2Port, Picker, Queue, RegFile, SRAM
 from .component import component
 from .connectors import Connector, ConnectorBundle, ModuleInstanceHandle, RegConnector, WireConnector
@@ -41,6 +42,7 @@ __all__ = [
     "ct",
     "function",
     "module",
+    "meta",
     "template",
     "s",
     "sva",

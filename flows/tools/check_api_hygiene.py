@@ -87,6 +87,11 @@ def main() -> int:
         description="Fail if stale/forbidden pyCircuit frontend API tokens are present."
     )
     ap.add_argument(
+        "--scan-root",
+        default=None,
+        help="Optional root directory to scan. Defaults to this repo root.",
+    )
+    ap.add_argument(
         "targets",
         nargs="*",
         default=list(DEFAULT_TARGETS),
@@ -95,12 +100,15 @@ def main() -> int:
     args = ap.parse_args()
 
     root = Path(__file__).resolve().parents[2]
+    scan_root = Path(args.scan_root).resolve() if args.scan_root else root
+    if not scan_root.exists():
+        raise SystemExit(f"--scan-root does not exist: {scan_root}")
     violations = 0
 
     for target in args.targets:
-        tp = (root / target).resolve() if not Path(target).is_absolute() else Path(target)
+        tp = (scan_root / target).resolve() if not Path(target).is_absolute() else Path(target)
         for f in iter_target_files(tp):
-            rel = f.relative_to(root) if f.is_relative_to(root) else f
+            rel = f.relative_to(scan_root) if f.is_relative_to(scan_root) else f
             rel_posix = rel.as_posix() if isinstance(rel, Path) else str(rel)
             extra = (
                 EXAMPLES_ONLY_PATTERNS

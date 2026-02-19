@@ -1021,6 +1021,115 @@ class Circuit(Module):
             raise ConnectorError("conditional connect (`when=...`) is only supported for RegConnector destinations")
         self.assign(d.read(), s.read())
 
+    def io_in(self, spec: Any, *, prefix: str | None = None) -> ConnectorBundle:
+        """Declare connector-backed input ports from a meta spec."""
+        from .meta.connect import declare_inputs
+
+        return declare_inputs(self, spec, prefix=prefix)
+
+    def io_out(
+        self,
+        spec: Any,
+        values: ConnectorBundle | Mapping[str, Any],
+        *,
+        prefix: str | None = None,
+    ) -> ConnectorBundle:
+        """Declare connector-backed output ports from a meta spec."""
+        from .meta.connect import declare_outputs
+
+        return declare_outputs(self, spec, values, prefix=prefix)
+
+    def state_regs(
+        self,
+        spec: Any,
+        *,
+        clk: Connector | Signal,
+        rst: Connector | Signal,
+        prefix: str | None = None,
+        init: Mapping[str, Any] | Any = 0,
+        en: Connector | Signal | int | LiteralValue = 1,
+    ) -> ConnectorBundle:
+        """Declare register connectors from a meta spec."""
+        from .meta.connect import declare_state_regs
+
+        return declare_state_regs(
+            self,
+            spec,
+            clk=clk,
+            rst=rst,
+            prefix=prefix,
+            init=init,
+            en=en,
+        )
+
+    def pipe_regs(
+        self,
+        stage_spec: Any,
+        in_bundle: ConnectorBundle | Mapping[str, Any],
+        *,
+        clk: Connector | Signal,
+        rst: Connector | Signal,
+        en: Connector | Signal | int | LiteralValue = 1,
+        flush: Connector | Signal | int | LiteralValue | None = None,
+        prefix: str | None = None,
+        init: Mapping[str, Any] | Any = 0,
+    ) -> ConnectorBundle:
+        """Register a stage payload bundle and connect inputs with optional flush."""
+        regs = self.state_regs(stage_spec, clk=clk, rst=rst, prefix=prefix, init=init, en=en)
+
+        src: Mapping[str, Any]
+        if isinstance(in_bundle, ConnectorBundle):
+            src = {k: v for k, v in in_bundle.items()}
+        else:
+            src = dict(in_bundle)
+
+        dkeys = set(regs.keys())
+        skeys = set(str(k) for k in src.keys())
+        missing = sorted(dkeys - skeys)
+        extra = sorted(skeys - dkeys)
+        if missing or extra:
+            parts: list[str] = []
+            if missing:
+                parts.append("missing: " + ", ".join(missing))
+            if extra:
+                parts.append("extra: " + ", ".join(extra))
+            raise ConnectorError(f"pipe_regs key mismatch ({'; '.join(parts)})")
+
+        for key in sorted(dkeys):
+            self.connect(regs[key], self.as_connector(src[key], name=key), when=en)
+        if flush is not None:
+            for key in sorted(dkeys):
+                r = regs[key]
+                if isinstance(r, RegConnector):
+                    r.set(0, when=flush)
+        return regs
+
+    def instance_bind(
+        self,
+        fn: Any,
+        *,
+        name: str,
+        spec_bindings: Mapping[str, Connector | ConnectorBundle | Mapping[str, Any]],
+        params: dict[str, Any] | None = None,
+        module_name: str | None = None,
+    ) -> ModuleInstanceHandle:
+        """Instantiate a module from connector/spec bindings.
+
+        `spec_bindings` values may be:
+        - `Connector`: bound directly to a single callee port
+        - `ConnectorBundle`/mapping: expanded as `<binding_key>_<field>`
+        """
+        from .meta.connect import bind_instance_ports
+
+        ports = bind_instance_ports(self, spec_bindings)
+        return self.instance_handle(
+            fn,
+            name=str(name),
+            params=params,
+            module_name=module_name,
+            **ports,
+        )
+
     def _coerce_instance_connector(self, v: Any, *, port: str) -> Connector:
         from .design import DesignError
 
