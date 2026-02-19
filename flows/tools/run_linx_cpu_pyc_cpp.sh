@@ -181,7 +181,16 @@ fi
 
 PYC_LOGIC_DEPTH="${PYC_LOGIC_DEPTH:-1024}"
 SIM_MODE="cpp-only"
-BUILD_KEY="logic_depth=${PYC_LOGIC_DEPTH};sim_mode=${SIM_MODE};mem_bytes=${PYC_MEM_BYTES:-default}"
+PYC_COMPILE_HELP="$("${PYC_COMPILE}" --help 2>&1 || true)"
+PYC_SUPPORTS_SIM_MODE=0
+PYC_SUPPORTS_LOGIC_DEPTH=0
+if grep -q -- "--sim-mode" <<<"${PYC_COMPILE_HELP}"; then
+  PYC_SUPPORTS_SIM_MODE=1
+fi
+if grep -q -- "--logic-depth" <<<"${PYC_COMPILE_HELP}"; then
+  PYC_SUPPORTS_LOGIC_DEPTH=1
+fi
+BUILD_KEY="logic_depth=${PYC_LOGIC_DEPTH};sim_mode=${SIM_MODE};mem_bytes=${PYC_MEM_BYTES:-default};sim_mode_flag=${PYC_SUPPORTS_SIM_MODE};logic_depth_flag=${PYC_SUPPORTS_LOGIC_DEPTH}"
 
 need_regen=0
 if [[ ! -f "${CPP_MANIFEST}" || ! -f "${KEY_FILE}" ]]; then
@@ -220,6 +229,9 @@ fi
 
 if [[ "${need_build}" -ne 0 ]]; then
   EXTRA_INC=("${ROOT_DIR}/runtime")
+  if [[ -d "${ROOT_DIR}/include/pyc" ]]; then
+    EXTRA_INC+=("${ROOT_DIR}/include/pyc")
+  fi
   build_cmd=(python3 "${ROOT_DIR}/flows/tools/build_cpp_manifest.py"
     --manifest "${CPP_MANIFEST}"
     --tb "${TB_SRC}"
