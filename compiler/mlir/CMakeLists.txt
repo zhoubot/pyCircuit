@@ -75,6 +75,7 @@ add_library(pyc_transforms
   lib/Transforms/CollectCompileStatsPass.cpp
   lib/Transforms/EliminateDeadStatePass.cpp
   lib/Transforms/EliminateWiresPass.cpp
+  lib/Transforms/InlineFunctionsPass.cpp
   lib/Transforms/PackI1RegsPass.cpp
   lib/Transforms/FuseCombPass.cpp
   lib/Transforms/LowerSCFToPYCStaticPass.cpp

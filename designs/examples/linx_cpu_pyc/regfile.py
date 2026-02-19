@@ -1,8 +1,9 @@
 from __future__ import annotations
-from pycircuit import Circuit, Reg, Vec, Wire, jit_inline, u
+from pycircuit import Circuit, Reg, Vec, Wire, function, u
 from pycircuit.dsl import Signal
 from .isa import REG_INVALID
 
+@function
 def make_gpr(m: Circuit, clk: Signal, rst: Signal, *, boot_sp: Wire, en: Wire) -> list[Reg]:
     """24-entry GPR file (r0 forced to 0, r1 initialized to boot_sp)."""
     zero64 = u(64, 0)
@@ -12,12 +13,14 @@ def make_gpr(m: Circuit, clk: Signal, rst: Signal, *, boot_sp: Wire, en: Wire) -
         regs.append(m.out(f'r{i}', clk=clk, rst=rst, width=64, init=init, en=en))
     return regs
 
+@function
 def make_regs(m: Circuit, clk: Signal, rst: Signal, *, count: int, width: int, init: Wire, en: Wire) -> list[Reg]:
     regs: list[Reg] = []
     for i in range(count):
         regs.append(m.out(f'r{i}', clk=clk, rst=rst, width=width, init=init, en=en))
     return regs
 
+@function
 def read_reg(m: Circuit, code: Wire, *, gpr: list[Reg], t: list[Reg], u: list[Reg], default: Wire) -> Wire:
     """Mux-based regfile read with strict defaulting (out-of-range -> default)."""
     c = m.const
@@ -31,7 +34,7 @@ def read_reg(m: Circuit, code: Wire, *, gpr: list[Reg], t: list[Reg], u: list[Re
         v = u[i] if code == c(28 + i, width=6) else v
     return v
 
-@jit_inline
+@function
 def stack_next(m: Circuit, arr: list[Reg], *, do_push: Wire, do_clear: Wire, value: Wire) -> Vec:
     n0 = arr[0].out()
     n1 = arr[1].out()
@@ -49,6 +52,7 @@ def stack_next(m: Circuit, arr: list[Reg], *, do_push: Wire, do_clear: Wire, val
         n3 = 0
     return m.vec(n0, n1, n2, n3)
 
+@function
 def commit_gpr(m: Circuit, gpr: list[Reg], *, do_reg_write0: Wire, regdst0: Wire | Reg, value0: Wire | Reg, do_reg_write1: Wire | None=None, regdst1: Wire | Reg | None=None, value1: Wire | Reg | None=None, macro_do_reg_write: Wire | None=None, macro_regdst: Wire | Reg | None=None, macro_value: Wire | Reg | None=None) -> None:
     c = m.const
     zero64 = u(64, 0)
@@ -76,6 +80,7 @@ def commit_gpr(m: Circuit, gpr: list[Reg], *, do_reg_write0: Wire, regdst0: Wire
         wdata = macro_value if we_macro else wdata_pipe
         gpr[i].set(wdata, when=we)
 
+@function
 def commit_stack(m: Circuit, arr: list[Reg], next_vals: list[Wire]) -> None:
     for i in range(4):
         arr[i].set(next_vals[i])

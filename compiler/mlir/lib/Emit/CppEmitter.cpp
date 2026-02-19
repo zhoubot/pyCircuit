@@ -614,7 +614,8 @@ static LogicalResult emitFunc(func::FuncOp f, llvm::raw_ostream &os) {
     os << "  // Sub-modules.\n";
     for (const auto &ii : instInfos) {
       auto callee = ii.callee;
-      os << "  " << sanitizeId(callee.getSymName()) << " " << ii.member << "{};\n";
+      os << "  std::shared_ptr<" << sanitizeId(callee.getSymName()) << "> " << ii.member
+         << " = std::make_shared<" << sanitizeId(callee.getSymName()) << ">();\n";
     }
     os << "\n";
 
@@ -1162,9 +1163,9 @@ static LogicalResult emitFunc(func::FuncOp f, llvm::raw_ostream &os) {
     os << "    #ifdef PYC_DISABLE_INSTANCE_EVAL_CACHE\n";
     for (unsigned i = 0; i < inst.getNumOperands(); ++i) {
       std::string inValue = nt.get(inst.getOperand(i));
-      os << "    " << ii.member << "." << ii.inPorts[i] << " = " << inValue << ";\n";
+      os << "    " << ii.member << "->" << ii.inPorts[i] << " = " << inValue << ";\n";
     }
-    os << "    " << ii.member << ".eval();\n";
+    os << "    " << ii.member << "->eval();\n";
     os << "    if (_pyc_sim_stats_enable) _pyc_sim_stats.instance_eval_calls++;\n";
     os << "    _pyc_inst_changed = true;\n";
     os << "    #else\n";
@@ -1207,9 +1208,9 @@ static LogicalResult emitFunc(func::FuncOp f, llvm::raw_ostream &os) {
     os << "    if (" << changedFlag << ") {\n";
     for (unsigned i = 0; i < inst.getNumOperands(); ++i) {
       std::string cacheName = ii.member + "_eval_cache_in_" + std::to_string(i);
-      os << "      " << ii.member << "." << ii.inPorts[i] << " = " << cacheName << ";\n";
+      os << "      " << ii.member << "->" << ii.inPorts[i] << " = " << cacheName << ";\n";
     }
-    os << "      " << ii.member << ".eval();\n";
+    os << "      " << ii.member << "->eval();\n";
     os << "      if (_pyc_sim_stats_enable) _pyc_sim_stats.instance_eval_calls++;\n";
     os << "    } else {\n";
     os << "      if (_pyc_sim_stats_enable) _pyc_sim_stats.instance_cache_skips++;\n";
@@ -1225,10 +1226,10 @@ static LogicalResult emitFunc(func::FuncOp f, llvm::raw_ostream &os) {
     for (unsigned i = 0; i < inst.getNumOperands(); ++i) {
       std::string cacheName = ii.member + "_eval_cache_in_" + std::to_string(i);
       std::string inValue = nt.get(inst.getOperand(i));
-      os << "      " << ii.member << "." << ii.inPorts[i] << " = " << inValue << ";\n";
+      os << "      " << ii.member << "->" << ii.inPorts[i] << " = " << inValue << ";\n";
       os << "      " << cacheName << " = " << inValue << ";\n";
     }
-    os << "      " << ii.member << ".eval();\n";
+    os << "      " << ii.member << "->eval();\n";
     os << "      if (_pyc_sim_stats_enable) _pyc_sim_stats.instance_eval_calls++;\n";
     os << "    } else {\n";
     os << "      if (_pyc_sim_stats_enable) _pyc_sim_stats.instance_cache_skips++;\n";
@@ -1238,7 +1239,7 @@ static LogicalResult emitFunc(func::FuncOp f, llvm::raw_ostream &os) {
     os << "    " << ii.member << "_eval_cache_valid = true;\n";
     os << "    #endif\n";
     for (unsigned i = 0; i < inst.getNumResults(); ++i)
-      os << "    " << nt.get(inst.getResult(i)) << " = " << ii.member << "." << ii.outPorts[i] << ";\n";
+      os << "    " << nt.get(inst.getResult(i)) << " = " << ii.member << "->" << ii.outPorts[i] << ";\n";
     os << "    return _pyc_inst_changed;\n";
     os << "  }\n\n";
   };
@@ -1880,8 +1881,8 @@ static LogicalResult emitFunc(func::FuncOp f, llvm::raw_ostream &os) {
       const auto &ii = instInfos[i];
       auto inst = ii.op;
       for (unsigned j = 0; j < inst.getNumOperands(); ++j)
-        os << "    " << ii.member << "." << ii.inPorts[j] << " = " << nt.get(inst.getOperand(j)) << ";\n";
-      os << "    " << ii.member << ".tick_compute();\n";
+        os << "    " << ii.member << "->" << ii.inPorts[j] << " = " << nt.get(inst.getOperand(j)) << ";\n";
+      os << "    " << ii.member << "->tick_compute();\n";
     }
     os << "  }\n\n";
   };
@@ -1890,7 +1891,7 @@ static LogicalResult emitFunc(func::FuncOp f, llvm::raw_ostream &os) {
     os << "  inline void tick_commit_part_" << partIdx << "() {\n";
     // Sub-modules.
     for (unsigned i = begin; i < end && i < instInfos.size(); ++i)
-      os << "    " << instInfos[i].member << ".tick_commit();\n";
+      os << "    " << instInfos[i].member << "->tick_commit();\n";
     os << "  }\n\n";
   };
 
@@ -1983,6 +1984,7 @@ LogicalResult emitCpp(ModuleOp module, llvm::raw_ostream &os, const CppEmitterOp
   os << "#include <cstdint>\n";
   os << "#include <fstream>\n";
   os << "#include <iostream>\n";
+  os << "#include <memory>\n";
   os << "#include <string>\n";
   os << "#include <cpp/pyc_sim.hpp>\n\n";
   os << "namespace pyc::gen {\n\n";

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from pycircuit import Circuit, Wire, jit_inline
+from pycircuit import Circuit, Wire, function
 
 from ..decode import decode_window
 from ..isa import REG_INVALID
@@ -9,7 +9,7 @@ from ..regfile import read_reg
 from ..util import Consts
 
 
-@jit_inline
+@function
 def build_id_stage(
     m: Circuit,
     *,

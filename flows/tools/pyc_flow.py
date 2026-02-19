@@ -485,12 +485,14 @@ def cmd_fastfwd_crosscheck(args: argparse.Namespace) -> int:
     env = dict(os.environ)
     env["PYTHONDONTWRITEBYTECODE"] = "1"
     env["PYTHONPATH"] = pythonpath_env()
+    env["CXX"] = cxx
 
     with tempfile.TemporaryDirectory(prefix="pyc_fastfwd_xchk.") as td_str:
         td = Path(td_str)
         pyc_path = td / "fastfwd_pyc.pyc"
         v_path = td / "fastfwd_pyc.v"
-        h_path = td / "fastfwd_pyc_gen.hpp"
+        cpp_dir = td / "cpp"
+        cpp_manifest = cpp_dir / "cpp_compile_manifest.json"
         top_path = td / "exam2021_top.v"
         fe_path = td / "fe.v"
 
@@ -507,7 +509,19 @@ def cmd_fastfwd_crosscheck(args: argparse.Namespace) -> int:
         run(emit_cmd, cwd=ROOT, env=env)
 
         run([str(pyc_compile), str(pyc_path), "--emit=verilog", "-o", str(v_path)], cwd=ROOT, env=env)
-        run([str(pyc_compile), str(pyc_path), "--emit=cpp", "--sim-mode=cpp-only", "-o", str(h_path)], cwd=ROOT, env=env)
+        run(
+            [
+                str(pyc_compile),
+                str(pyc_path),
+                "--emit=cpp",
+                "--sim-mode=cpp-only",
+                "--out-dir",
+                str(cpp_dir),
+                "--cpp-split=module",
+            ],
+            cwd=ROOT,
+            env=env,
+        )
 
         nfe = _fastfwd_detect_nfe(v_path)
         if nfe <= 0:
@@ -520,23 +534,25 @@ def cmd_fastfwd_crosscheck(args: argparse.Namespace) -> int:
 
         # Build + run C++ tick model: generate stim + output trace.
         tb_cpp = td / "tb_fastfwd_pyc_cpp"
-        run(
-            [
-                cxx,
-                "-std=c++17",
-                "-O2",
-                f"-DFASTFWD_TOTAL_ENG={nfe}",
-                "-I",
-                str(ROOT / "include"),
-                "-I",
-                str(td),
-                "-o",
-                str(tb_cpp),
-                str(ROOT / "designs" / "examples" / "fastfwd_pyc" / "tb_fastfwd_pyc.cpp"),
-            ],
-            cwd=ROOT,
-            env=env,
-        )
+        build_cmd = [
+            sys.executable,
+            str(ROOT / "flows" / "tools" / "build_cpp_manifest.py"),
+            "--manifest",
+            str(cpp_manifest),
+            "--tb",
+            str(ROOT / "designs" / "examples" / "fastfwd_pyc" / "tb_fastfwd_pyc.cpp"),
+            "--out",
+            str(tb_cpp),
+            "--profile",
+            "release",
+            "--extra-include",
+            str(ROOT / "runtime"),
+            "--extra-define",
+            f"FASTFWD_TOTAL_ENG={nfe}",
+        ]
+        if (ROOT / "include" / "pyc").is_dir():
+            build_cmd += ["--extra-include", str(ROOT / "include" / "pyc")]
+        run(build_cmd, cwd=ROOT, env=env)
         run(
             [
                 str(tb_cpp),

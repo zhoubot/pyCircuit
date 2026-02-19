@@ -1,12 +1,15 @@
 from __future__ import annotations
 
-from pycircuit import Circuit, compile_design, u
+from pycircuit import Circuit, compile_design, function, module, u
 
 
-def _shift4(v: list, d: list, z):
+@function
+def _shift4(m: Circuit, v: list, d: list, z):
+    _ = m
     return [v[1], v[2], v[3], z], [d[1], d[2], d[3], d[3]]
 
 
+@module
 def build(m: Circuit) -> None:
     clk = m.clock("clk")
     rst = m.reset("rst")
@@ -29,11 +32,11 @@ def build(m: Circuit) -> None:
     push = in_valid & in_ready
 
     z1 = u(1, 0)
-    s1_v, s1_d = _shift4(v0, d0, z1)
+    s1_v, s1_d = _shift4(m, v0, d0, z1)
     a1_v = [s1_v[i] if pop0 else v0[i] for i in range(4)]
     a1_d = [s1_d[i] if pop0 else d0[i] for i in range(4)]
 
-    s2_v, s2_d = _shift4(a1_v, a1_d, z1)
+    s2_v, s2_d = _shift4(m, a1_v, a1_d, z1)
     a2_v = [s2_v[i] if pop1 else a1_v[i] for i in range(4)]
     a2_d = [s2_d[i] if pop1 else a1_d[i] for i in range(4)]
 

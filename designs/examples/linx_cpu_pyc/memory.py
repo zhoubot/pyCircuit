@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-from pycircuit import Circuit, Reg, Wire, jit_inline
+from pycircuit import Circuit, Reg, Wire, function
 from pycircuit.dsl import Signal
 
 
-@jit_inline
+@function
 def build_byte_mem(
     m: Circuit,
     clk: Signal,

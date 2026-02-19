@@ -1,119 +1,77 @@
-# pyCircuit
+# pyCircuit v3.1
 
-`pyCircuit` is a Python-first hardware construction and compilation toolkit built on a PYC MLIR dialect.
+pyCircuit v3.1 is a strict module/connector-first hardware frontend and MLIR compiler flow.
 
-You write Python design code, emit MLIR (`.pyc`), run a strict MLIR pass pipeline, then emit:
+Design intent:
+- Scale to very large designs without single-file C++/Verilog emission bottlenecks.
+- Preserve hierarchy by default with explicit module boundaries.
+- Support compile-time Python template metaprogramming with zero emitted IR side effects.
 
-- Verilog RTL
-- C++ cycle models
+## Core authoring model
 
-## Documentation
+- `@module`: hierarchy boundary, default non-inline.
+- `@function`: inline hardware helper.
+- `@template`: compile-time helper, must be pure, emits no IR.
+- Inter-module links use connectors (`Connector`, `WireConnector`, `RegConnector`, `ConnectorBundle`).
 
-- `docs/USAGE.md`: frontend design authoring guide
-- `docs/COMPILER_FLOW.md`: refactored end-to-end flow + pass-by-pass pipeline reference
-- `docs/IR_SPEC.md`: PYC IR contract
-- `docs/PRIMITIVES.md`: runtime primitive contracts (`runtime/cpp`, `runtime/verilog`)
-- `docs/VERILOG_FLOW.md`: open-source Verilog sim/lint flow
-- `docs/LINX_WORKSPACE.md`: Windows + Zybo + Linx workspace notes
-- `docs/WSL_UBUNTU_ON_WINDOWS.md`: WSL setup for Linx bring-up
+Public frontend entrypoint:
+- `pycircuit.compile_design(...)`
 
-## Refactored Layout (Current)
+Removed from public API:
+- inline alias decorator (removed)
+- public compile alias (removed)
 
-- Frontend: `compiler/frontend/pycircuit/`
-- MLIR compiler: `compiler/mlir/`
-- Runtime libraries: `runtime/cpp/`, `runtime/verilog/`
-- Flows: `flows/scripts/`, `flows/tools/`
-- Designs: `designs/examples/`, `designs/linxcore/`
+## Repository layout
 
-Legacy paths are no longer canonical (`python/pycircuit`, `pyc/mlir`, `include/pyc`, `tools/`, `scripts/`, `examples/`, `janus/`).
+- Frontend: `/Users/zhoubot/pyCircuit/compiler/frontend/pycircuit`
+- MLIR compiler: `/Users/zhoubot/pyCircuit/compiler/mlir`
+- Runtime: `/Users/zhoubot/pyCircuit/runtime/cpp`, `/Users/zhoubot/pyCircuit/runtime/verilog`
+- Flows/tools: `/Users/zhoubot/pyCircuit/flows`
+- Examples: `/Users/zhoubot/pyCircuit/designs/examples`
 
 ## Quickstart
 
-## 1) Build compiler tools
+1. Build compiler tools:
 
 ```bash
-flows/scripts/pyc build
+bash flows/scripts/pyc build
 ```
 
-## 2) Emit MLIR from Python design
+2. Emit MLIR from a v3.1 design:
 
 ```bash
 PYTHONPATH=compiler/frontend python3 -m pycircuit.cli emit \
-  designs/examples/jit_pipeline_vec.py \
-  -o /tmp/jit_pipeline_vec.pyc
+  designs/examples/template_arith_demo.py \
+  -o /tmp/template_arith_demo.pyc
 ```
 
-## 3) Compile MLIR to Verilog / C++
+3. Compile with split outputs (recommended):
 
 ```bash
-./build/bin/pyc-compile /tmp/jit_pipeline_vec.pyc --emit=verilog -o /tmp/jit_pipeline_vec.v
-./build/bin/pyc-compile /tmp/jit_pipeline_vec.pyc --emit=cpp -o /tmp/jit_pipeline_vec.hpp
+build/bin/pyc-compile /tmp/template_arith_demo.pyc \
+  --emit=cpp --out-dir /tmp/template_arith_demo_cpp --cpp-split=module
+
+build/bin/pyc-compile /tmp/template_arith_demo.pyc \
+  --emit=verilog --out-dir /tmp/template_arith_demo_v
 ```
 
-Useful options:
+## Main docs
 
-- `--sim-mode=default|cpp-only`
-- `--cpp-only-preserve-ops` (only meaningful with `cpp-only`)
-- `--logic-depth=<N>` (default `32`)
-- `--out-dir=<dir>` (split-per-module emission + `manifest.json` + `compile_stats.json`)
+- `/Users/zhoubot/pyCircuit/docs/USAGE.md`
+- `/Users/zhoubot/pyCircuit/docs/TEMPLATE_METAPROGRAMMING.md`
+- `/Users/zhoubot/pyCircuit/docs/COMPILER_FLOW.md`
+- `/Users/zhoubot/pyCircuit/docs/IR_SPEC.md`
+- `/Users/zhoubot/pyCircuit/docs/PRIMITIVES.md`
 
-## 4) Regenerate local outputs / run regressions
+## Regressions
 
-```bash
-flows/scripts/pyc regen
-flows/scripts/pyc test
-```
+- `bash /Users/zhoubot/pyCircuit/flows/scripts/run_examples.sh`
+- `bash /Users/zhoubot/pyCircuit/flows/tools/run_linx_cpu_pyc_cpp.sh`
+- `bash /Users/zhoubot/pyCircuit/flows/tools/run_fastfwd_pyc_cpp.sh`
+- `python3 /Users/zhoubot/pyCircuit/flows/tools/perf/run_perf_smoke.py`
 
-Equivalent flow-runner commands:
-
-```bash
-python3 flows/tools/pyc_flow.py doctor
-python3 flows/tools/pyc_flow.py regen
-python3 flows/tools/pyc_flow.py cpp-test
-```
-
-## Frontend Semantics (Refactored)
-
-- JIT-by-default build pattern: `build(m: Circuit, ...)`.
-- In design context, plain calls `child(m, ...)` auto-instantiate modules.
-- Hardware args become ports; Python literals become specialization parameters.
-- For complex specialization objects, use explicit `Circuit.instance(..., params=...)`.
-- `@jit_inline` is the explicit inline escape hatch.
-- `m.debug(name, signal)` exports stable debug probe ports (`dbg__*`) for TB/traces.
-
-See `docs/USAGE.md` for detailed frontend rules and examples.
-
-## Compiler Pipeline
-
-The exact pass order and per-pass behavior are documented in `docs/COMPILER_FLOW.md`.
-
-Current `pyc-compile` default pipeline ends with strict legality checks:
-
-- no remaining dynamic SCF/index hardware values,
-- strict combinational depth check (`--logic-depth`),
-- compile stats collection (`Reg/Mem`, `WNS/TNS`, depth).
-
-## Generated Artifact Policy
-
-Generated files are out-of-tree local artifacts and are not checked into git.
-
-Default script output root:
-
-- `.pycircuit_out/examples/...`
-- `.pycircuit_out/linxcore/...`
-
-The repository `.gitignore` enforces this policy.
-
-## Linx bring-up shortcuts
-
-Run Linx CPU C++ regression:
+## API hygiene check
 
 ```bash
-bash flows/tools/run_linx_cpu_pyc_cpp.sh
-```
-
-Run LinxCore smoke regression:
-
-```bash
-bash designs/linxcore/tests/test_trace_schema_and_mem.sh
+python3 /Users/zhoubot/pyCircuit/flows/tools/check_api_hygiene.py
 ```

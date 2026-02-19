@@ -55,6 +55,11 @@ struct FuseCombPass : public PassWrapper<FuseCombPass, OperationPass<func::FuncO
 
   void runOnOperation() override {
     func::FuncOp f = getOperation();
+    if (auto structural = f->getAttrOfType<StringAttr>("pyc.emit.structural")) {
+      llvm::StringRef v = structural.getValue();
+      if (v.equals_insensitive("true") || v == "1")
+        return;
+    }
     for (Block &b : f.getBody())
       fuseBlock(b);
   }

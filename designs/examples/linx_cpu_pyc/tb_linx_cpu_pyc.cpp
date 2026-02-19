@@ -3,7 +3,7 @@
 
 #include <cpp/pyc_tb.hpp>
 
-#include "linx_cpu_pyc_gen.hpp"
+#include "linx_cpu_pyc.hpp"
 
 using pyc::cpp::Testbench;
 using pyc::cpp::Wire;

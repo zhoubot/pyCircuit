@@ -78,7 +78,8 @@ cd "${ROOT_DIR}"
 GEN_DIR="$(pyc_out_root)/examples/linx_cpu_pyc"
 mkdir -p "${GEN_DIR}"
 PYC_PATH="${GEN_DIR}/linx_cpu_pyc.pyc"
-HDR="${GEN_DIR}/linx_cpu_pyc_gen.hpp"
+CPP_OUT_DIR="${GEN_DIR}/cpp"
+CPP_MANIFEST="${CPP_OUT_DIR}/cpp_compile_manifest.json"
 KEY_FILE="${GEN_DIR}/linx_cpu_pyc.build_key"
 
 EMIT_PARAMS=()
@@ -177,11 +178,11 @@ SIM_MODE="cpp-only"
 BUILD_KEY="logic_depth=${PYC_LOGIC_DEPTH};sim_mode=${SIM_MODE};mem_bytes=${PYC_MEM_BYTES:-default}"
 
 need_regen=0
-if [[ ! -f "${HDR}" || ! -f "${KEY_FILE}" ]]; then
+if [[ ! -f "${CPP_MANIFEST}" || ! -f "${KEY_FILE}" ]]; then
   need_regen=1
 elif [[ "$(cat "${KEY_FILE}")" != "${BUILD_KEY}" ]]; then
   need_regen=1
-elif find "${ROOT_DIR}/designs/examples/linx_cpu_pyc" -name '*.py' -newer "${HDR}" | grep -q .; then
+elif find "${ROOT_DIR}/designs/examples/linx_cpu_pyc" -name '*.py' -newer "${CPP_MANIFEST}" | grep -q .; then
   need_regen=1
 fi
 
@@ -190,24 +191,12 @@ if [[ "${need_regen}" -ne 0 ]]; then
     python3 -m pycircuit.cli emit ${EMIT_PARAMS[@]+"${EMIT_PARAMS[@]}"} \
     designs/examples/linx_cpu_pyc/linx_cpu_pyc.py -o "${PYC_PATH}"
 
+  rm -rf "${CPP_OUT_DIR}"
+  mkdir -p "${CPP_OUT_DIR}"
   "${PYC_COMPILE}" "${PYC_PATH}" --emit=cpp --sim-mode="${SIM_MODE}" \
-    --logic-depth "${PYC_LOGIC_DEPTH}" -o "${HDR}"
+    --logic-depth "${PYC_LOGIC_DEPTH}" --out-dir "${CPP_OUT_DIR}" --cpp-split=module
   printf '%s\n' "${BUILD_KEY}" > "${KEY_FILE}"
 fi
-
-CXXFLAGS=(-std=c++17)
-case "${PYC_BUILD_PROFILE}" in
-  dev)
-    CXXFLAGS+=(-O1)
-    ;;
-  release)
-    CXXFLAGS+=(-O2 -DNDEBUG)
-    ;;
-  *)
-    echo "error: unknown PYC_BUILD_PROFILE=${PYC_BUILD_PROFILE} (expected: dev|release)" >&2
-    exit 2
-    ;;
-esac
 
 TB_SRC="${ROOT_DIR}/designs/examples/linx_cpu_pyc/tb_linx_cpu_pyc.cpp"
 TB_EXE="${GEN_DIR}/tb_linx_cpu_pyc_cpp_${PYC_BUILD_PROFILE}"
@@ -215,27 +204,25 @@ TB_EXE="${GEN_DIR}/tb_linx_cpu_pyc_cpp_${PYC_BUILD_PROFILE}"
 need_build=0
 if [[ ! -x "${TB_EXE}" ]]; then
   need_build=1
-elif [[ "${TB_SRC}" -nt "${TB_EXE}" || "${HDR}" -nt "${TB_EXE}" ]]; then
+elif [[ "${TB_SRC}" -nt "${TB_EXE}" || "${CPP_MANIFEST}" -nt "${TB_EXE}" ]]; then
+  need_build=1
+elif find "${CPP_OUT_DIR}" -type f \( -name '*.hpp' -o -name '*.cpp' -o -name '*.json' \) -newer "${TB_EXE}" | grep -q .; then
   need_build=1
 elif find "${ROOT_DIR}/runtime/cpp" -name '*.hpp' -newer "${TB_EXE}" | grep -q .; then
   need_build=1
 fi
 
 if [[ "${need_build}" -ne 0 ]]; then
-  EXTRA_INC=()
-  if [[ -d "${ROOT_DIR}/include/pyc" ]]; then
-    # Compatibility path for generators that include <cpp/...> headers.
-    EXTRA_INC+=( -I "${ROOT_DIR}/include/pyc" )
-  fi
-
-  tmp_exe="${TB_EXE}.tmp.$$"
-  "${CXX:-clang++}" "${CXXFLAGS[@]}" \
-    -I "${ROOT_DIR}/runtime" \
-    "${EXTRA_INC[@]}" \
-    -I "${GEN_DIR}" \
-    -o "${tmp_exe}" \
-    "${TB_SRC}"
-  mv -f "${tmp_exe}" "${TB_EXE}"
+  EXTRA_INC=("${ROOT_DIR}/runtime")
+  build_cmd=(python3 "${ROOT_DIR}/flows/tools/build_cpp_manifest.py"
+    --manifest "${CPP_MANIFEST}"
+    --tb "${TB_SRC}"
+    --out "${TB_EXE}"
+    --profile "${PYC_BUILD_PROFILE}")
+  for inc in "${EXTRA_INC[@]}"; do
+    build_cmd+=(--extra-include "${inc}")
+  done
+  "${build_cmd[@]}"
 fi
 
 if [[ -n "${MEMH}" ]]; then

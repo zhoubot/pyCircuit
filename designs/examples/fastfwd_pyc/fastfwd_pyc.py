@@ -1,8 +1,20 @@
 from __future__ import annotations
 
-from pycircuit import Circuit, u
+from pycircuit import Circuit, ct, module, template, u
 
 
+@template
+def _total_engines(m: Circuit, n_fe: int | None, eng_per_lane: int) -> int:
+    _ = m
+    if n_fe is not None:
+        n = int(n_fe)
+        if n <= 0:
+            raise ValueError("N_FE must be > 0")
+        return n
+    return max(1, int(eng_per_lane)) * ct.div_ceil(4, 1)
+
+
+@module
 def build(
     m: Circuit,
     N_FE: int | None = None,
@@ -16,7 +28,7 @@ def build(
     BKPR_SLACK: int = 1,
 ) -> None:
     _ = (LANE_Q_DEPTH, ENG_Q_DEPTH, ROB_DEPTH, SEQ_W, HIST_DEPTH, STASH_WIN, BKPR_SLACK)
-    total_eng = int(N_FE) if N_FE is not None else max(1, 4 * int(ENG_PER_LANE))
+    total_eng = _total_engines(m, N_FE, ENG_PER_LANE)
 
     lane_in_vld = [m.input(f"lane{i}_pkt_in_vld", width=1) for i in range(4)]
     lane_in_data = [m.input(f"lane{i}_pkt_in_data", width=128) for i in range(4)]

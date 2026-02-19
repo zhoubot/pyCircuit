@@ -1,8 +1,18 @@
 from __future__ import annotations
 
-from pycircuit import Circuit, u
+from pycircuit import Circuit, ct, module, template, u
 
 
+@template
+def _layout_cfg(m: Circuit, *, mem_bytes: int, icache_bytes: int, dcache_bytes: int) -> tuple[int, int, int]:
+    _ = m
+    mem = ct.pow2_ceil(max(1, int(mem_bytes)))
+    icache = ct.align_up(max(64, int(icache_bytes)), 64)
+    dcache = ct.align_up(max(64, int(dcache_bytes)), 64)
+    return (mem, icache, dcache)
+
+
+@module
 def build(
     m: Circuit,
     *,
@@ -10,7 +20,13 @@ def build(
     icache_bytes: int = 16 << 10,
     dcache_bytes: int = 32 << 10,
 ) -> None:
-    _ = (mem_bytes, icache_bytes, dcache_bytes)
+    mem_cfg, icache_cfg, dcache_cfg = _layout_cfg(
+        m,
+        mem_bytes=mem_bytes,
+        icache_bytes=icache_bytes,
+        dcache_bytes=dcache_bytes,
+    )
+    _ = (mem_cfg, icache_cfg, dcache_cfg)
 
     clk = m.clock("clk")
     rst = m.reset("rst")

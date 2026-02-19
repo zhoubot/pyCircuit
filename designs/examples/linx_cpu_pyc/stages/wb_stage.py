@@ -1,6 +1,6 @@
 from __future__ import annotations
 from dataclasses import dataclass
-from pycircuit import Circuit, Wire, jit_inline, u
+from pycircuit import Circuit, Wire, function, u
 from pycircuit import unsigned
 from ..isa import BK_CALL, BK_COND, BK_ICALL, BK_IND, BK_DIRECT, BK_FALL, BK_RET, OP_BSTART_STD_CALL, OP_BSTART_STD_COND, OP_BSTART_STD_DIRECT, OP_BSTART_STD_FALL, OP_C_BSTART_COND, OP_C_BSTART_DIRECT, OP_C_BSTART_STD, OP_C_LWI, OP_C_SETC_EQ, OP_C_SETC_NE, OP_C_SETC_TGT, OP_C_BSTOP, OP_FENTRY, OP_FEXIT, OP_FRET_RA, OP_FRET_STK, OP_SETC_AND, OP_SETC_ANDI, OP_SETC_EQ, OP_SETC_EQI, OP_SETC_GE, OP_SETC_GEI, OP_SETC_GEU, OP_SETC_GEUI, OP_SETC_LT, OP_SETC_LTI, OP_SETC_LTU, OP_SETC_LTUI, OP_SETC_NE, OP_SETC_NEI, OP_SETC_OR, OP_SETC_ORI
 from ..pipeline import CoreState, MemWbRegs
@@ -14,7 +14,7 @@ class WbControl:
     ra_write_valid: Wire
     ra_write_value: Wire
 
-@jit_inline
+@function
 def build_wb_stage(m: Circuit, *, do_wb: Wire, state: CoreState, memwb: MemWbRegs) -> WbControl:
     boundary_valid = u(1, 0)
     br_take = u(1, 0)

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from pycircuit import Circuit, cat, compile_design, u
+from pycircuit import Circuit, cat, compile_design, function, module, u
 
 MODE_RUN = 0
 MODE_SET_HOUR = 1
@@ -8,12 +8,14 @@ MODE_SET_MIN = 2
 MODE_SET_SEC = 3
 
 
+@function
 def _to_bcd8(m: Circuit, v):
     ones = v % u(v.width, 10)
     tens = v // u(v.width, 10)
     return cat(tens[0:4], ones[0:4])
 
 
+@module
 def build(m: Circuit, clk_freq: int = 50_000_000) -> None:
     clk = m.clock("clk")
     rst = m.reset("rst")

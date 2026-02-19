@@ -92,10 +92,10 @@ jobs:
             exit 1
           fi
 
-      - name: Enforce no legacy frontend APIs
+      - name: Enforce frontend API hygiene
         run: |
           set -euxo pipefail
-          python3 flows/tools/check_no_legacy_api.py
+          python3 flows/tools/check_api_hygiene.py
 
       - name: Run Linx CPU C++ regression
         run: |

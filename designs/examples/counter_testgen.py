@@ -1,9 +1,10 @@
 from __future__ import annotations
 
-from pycircuit import Circuit
+from pycircuit import Circuit, module
 from pycircuit.tb import Tb, sva
 
 
+@module
 def build(m: Circuit) -> None:
     clk = m.clock("clk")
     rst = m.reset("rst")

@@ -101,7 +101,8 @@ emit_cmd+=(-o "${WORK_DIR}/fastfwd_pyc.pyc")
 
 PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="$(pyc_pythonpath)" "${emit_cmd[@]}"
 
-"${PYC_COMPILE}" "${WORK_DIR}/fastfwd_pyc.pyc" --emit=cpp --sim-mode=cpp-only -o "${WORK_DIR}/fastfwd_pyc_gen.hpp"
+CPP_OUT_DIR="${WORK_DIR}/cpp"
+"${PYC_COMPILE}" "${WORK_DIR}/fastfwd_pyc.pyc" --emit=cpp --sim-mode=cpp-only --out-dir "${CPP_OUT_DIR}" --cpp-split=module
 if (( STATS )); then
   "${PYC_COMPILE}" "${WORK_DIR}/fastfwd_pyc.pyc" --emit=verilog -o "${WORK_DIR}/fastfwd_pyc.v"
 fi
@@ -111,11 +112,14 @@ if [[ -n "${N_FE}" ]]; then
   FASTFWD_TOTAL_ENG="${N_FE}"
 fi
 
-"${CXX:-clang++}" -std=c++17 -O2 -DFASTFWD_TOTAL_ENG="${FASTFWD_TOTAL_ENG}" \
-  -I "${ROOT_DIR}/runtime" \
-  -I "${WORK_DIR}" \
-  -o "${WORK_DIR}/tb_fastfwd_pyc" \
-  "${ROOT_DIR}/designs/examples/fastfwd_pyc/tb_fastfwd_pyc.cpp"
+build_cmd=(python3 "${ROOT_DIR}/flows/tools/build_cpp_manifest.py"
+  --manifest "${CPP_OUT_DIR}/cpp_compile_manifest.json"
+  --tb "${ROOT_DIR}/designs/examples/fastfwd_pyc/tb_fastfwd_pyc.cpp"
+  --out "${WORK_DIR}/tb_fastfwd_pyc"
+  --profile release
+  --extra-include "${ROOT_DIR}/runtime"
+  --extra-define "FASTFWD_TOTAL_ENG=${FASTFWD_TOTAL_ENG}")
+"${build_cmd[@]}"
 
 tb_out="$("${WORK_DIR}/tb_fastfwd_pyc" --seed "${SEED}" --cycles "${CYCLES}" --packets "${PACKETS}")"
 echo "${tb_out}"

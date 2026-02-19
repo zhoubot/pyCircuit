@@ -8,7 +8,7 @@
 
 #include <cpp/pyc_tb.hpp>
 
-#include "fastfwd_pyc_gen.hpp"
+#include "FastFwd.hpp"
 
 using pyc::cpp::Testbench;
 using pyc::cpp::Wire;

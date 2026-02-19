@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import inspect
+import linecache
 from dataclasses import MISSING, dataclass, fields, is_dataclass
 from typing import Any, Callable, TypeVar
 
+from .connectors import Connector
 from .design import module
 from .hw import Circuit
 
@@ -84,7 +86,10 @@ def _build_component_module_fn(cls: type[Any]) -> Callable[..., Any]:
         f"    {body_call}\n"
     )
     ns: dict[str, Any] = {"_cls": cls}
-    exec(src, ns, ns)
+    filename = f"<pyc_component:{cls.__module__}.{cls.__name__}>"
+    src_lines = [ln + "\n" for ln in src.splitlines()]
+    linecache.cache[filename] = (len(src), None, src_lines, filename)
+    exec(compile(src, filename, "exec"), ns, ns)
     fn = ns[fn_name]
     fn.__name__ = fn_name
     fn.__qualname__ = fn_name
@@ -117,6 +122,13 @@ def _component_call(self: Any, m: Circuit, /, *args: Any, name: str | None = Non
     missing = [p for p in ports if p not in bound_ports]
     if missing:
         raise TypeError(f"component {cls.__name__} missing port argument(s): {', '.join(missing)}")
+
+    for pname in ports:
+        pv = bound_ports[pname]
+        if not isinstance(pv, Connector):
+            raise TypeError(
+                f"component {cls.__name__} port {pname!r} expects a Connector, got {type(pv).__name__}"
+            )
 
     param_names = _component_param_names(cls)
     params = {p: getattr(self, p) for p in param_names}

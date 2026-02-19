@@ -16,8 +16,8 @@
 #include "llvm/ADT/SmallSet.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringMap.h"
-#include "llvm/ADT/Hashing.h"
 #include "llvm/Support/CommandLine.h"
+#include "llvm/Support/MD5.h"
 #include "llvm/Support/JSON.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/InitLLVM.h"
@@ -94,6 +94,11 @@ static llvm::cl::opt<bool> noInline(
     "noinline",
     llvm::cl::desc("Disable MLIR inliner to preserve module boundaries (prevents merge/flatten)"),
     llvm::cl::init(false));
+
+static llvm::cl::opt<std::string> emitStructuralMode(
+    "emit-structural",
+    llvm::cl::desc("Structural emission policy for comb fusion: auto|on|off"),
+    llvm::cl::init("auto"));
 
 static std::string topSymbol(ModuleOp module) {
   if (auto topAttr = module->getAttrOfType<FlatSymbolRefAttr>("pyc.top"))
@@ -729,8 +734,19 @@ static LogicalResult writeCppCompileManifest(llvm::StringRef path,
   manifest["sources"] = std::move(srcJson);
   manifest["top_header"] = topHeader.str();
 
-  auto hc = llvm::hash_combine_range(hashParts.begin(), hashParts.end());
-  manifest["deterministic_hash"] = llvm::utohexstr(static_cast<uint64_t>(hc));
+  std::string hashInput;
+  hashInput.reserve(256);
+  for (const auto &part : hashParts) {
+    hashInput.append(part);
+    hashInput.push_back('\n');
+  }
+  llvm::MD5 md5;
+  md5.update(hashInput);
+  llvm::MD5::MD5Result md5Result;
+  md5.final(md5Result);
+  llvm::SmallString<32> md5Hex;
+  llvm::MD5::stringifyResult(md5Result, md5Hex);
+  manifest["deterministic_hash"] = md5Hex.str().str();
 
   std::string buf;
   llvm::raw_string_ostream ss(buf);
@@ -863,8 +879,24 @@ int main(int argc, char **argv) {
     return 1;
   }
 
+  if (emitStructuralMode != "auto" && emitStructuralMode != "on" && emitStructuralMode != "off") {
+    llvm::errs() << "error: unknown --emit-structural: " << emitStructuralMode << " (expected: auto|on|off)\n";
+    return 1;
+  }
+  if (emitStructuralMode == "on" || emitStructuralMode == "off") {
+    bool enableStructural = (emitStructuralMode == "on");
+    for (func::FuncOp f : module->getOps<func::FuncOp>()) {
+      if (enableStructural)
+        f->setAttr("pyc.emit.structural", StringAttr::get(&ctx, "true"));
+      else
+        f->removeAttr("pyc.emit.structural");
+    }
+  }
+
   // Cleanup + optimization pipeline tuned for netlist-style emission.
   PassManager pm(&ctx);
+  pm.addPass(pyc::createInlineFunctionsPass());
+  pm.addPass(createSymbolDCEPass());
   if (!noInline)
     pm.addPass(createInlinerPass());
   pm.addPass(createCanonicalizerPass());
@@ -1030,6 +1062,7 @@ int main(int argc, char **argv) {
         os << "#include <cstdint>\n";
         os << "#include <fstream>\n";
         os << "#include <iostream>\n";
+        os << "#include <memory>\n";
         os << "#include <string>\n";
         os << "#include <cpp/pyc_sim.hpp>\n";
       };
@@ -1227,6 +1260,7 @@ int main(int argc, char **argv) {
           hos << "#pragma once\n";
           hos << "#include <cstdlib>\n";
           hos << "#include <iostream>\n";
+          hos << "#include <memory>\n";
           hos << "#include <cpp/pyc_sim.hpp>\n";
           for (const std::string &dep : deps[f.getSymName()])
             hos << "#include \"" << dep << ".hpp\"\n";

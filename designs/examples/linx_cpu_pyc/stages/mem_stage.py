@@ -1,9 +1,10 @@
 from __future__ import annotations
-from pycircuit import Circuit, Wire, jit_inline, u
+from pycircuit import Circuit, Wire, function, u
 from pycircuit import unsigned
 from ..isa import OP_HL_LBU_PCR, OP_HL_LHU_PCR, OP_HL_LWU_PCR, OP_LBUI, OP_LBU, OP_LHUI, OP_LHU, OP_LWUI, OP_LWU
 from ..pipeline import ExMemRegs, MemWbRegs
 
+@function
 def _bytes_with_wb_store_forwarding(m: Circuit, *, addr: Wire, mem_rdata: Wire, fwd_en: Wire, wb_store_addr: Wire, wb_store_size: Wire, wb_store_wdata: Wire) -> list[Wire]:
     _ = m
     bs = [mem_rdata[8 * i:8 * (i + 1)] for i in range(8)]
@@ -17,7 +18,7 @@ def _bytes_with_wb_store_forwarding(m: Circuit, *, addr: Wire, mem_rdata: Wire, 
         bs[i] = bi
     return bs
 
-@jit_inline
+@function
 def build_mem_stage(m: Circuit, *, do_mem: Wire, exmem: ExMemRegs, memwb: MemWbRegs, mem_rdata: Wire, wb_store_valid: Wire, wb_store_addr: Wire, wb_store_size: Wire, wb_store_wdata: Wire) -> Wire:
     mem_val = u(64, 0)
     with m.scope('MEM'):

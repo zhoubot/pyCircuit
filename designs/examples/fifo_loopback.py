@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-from pycircuit import Circuit, compile_design
+from pycircuit import Circuit, compile_design, module
 
 
+@module
 def build(m: Circuit, depth: int = 2) -> None:
     clk = m.clock("clk")
     rst = m.reset("rst")

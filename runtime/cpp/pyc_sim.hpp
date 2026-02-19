@@ -2,6 +2,7 @@
 
 #include "pyc_bits.hpp"
 #include "pyc_clock.hpp"
+#include "pyc_connector.hpp"
 #include "pyc_cdc_sync.hpp"
 #include "pyc_sync_mem.hpp"
 #include "pyc_byte_mem.hpp"

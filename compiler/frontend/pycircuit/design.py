@@ -16,19 +16,63 @@ class DesignError(RuntimeError):
     pass
 
 
-def module(*, name: str) -> Callable[[Any], Any]:
-    """Decorator to set a stable logical module base name.
+def module(_fn: Any | None = None, *, name: str | None = None, structural: bool = False) -> Callable[[Any], Any] | Any:
+    """Mark a function as a hierarchy-preserving module boundary.
 
-    This does not instantiate or compile anything by itself; it only influences
-    naming when the function is compiled as a standalone module (e.g. via
-    `Circuit.instance(...)`).
+    Module callsites are materialized as `pyc.instance` and are not inlined by
+    the frontend. `structural=True` tags the symbol for structural emission.
     """
 
     def deco(fn: Any) -> Any:
-        setattr(fn, "__pycircuit_module_name__", str(name))
+        module_name = str(name).strip() if isinstance(name, str) and name.strip() else getattr(fn, "__name__", "Module")
+        setattr(fn, "__pycircuit_module_name__", str(module_name))
+        setattr(fn, "__pycircuit_kind__", "module")
+        setattr(fn, "__pycircuit_inline__", False)
+        setattr(fn, "__pycircuit_emit_structural__", bool(structural))
         return fn
 
-    return deco
+    if _fn is None:
+        return deco
+    return deco(_fn)
+
+
+def function(_fn: Any | None = None, *, name: str | None = None) -> Callable[[Any], Any] | Any:
+    """Mark a function as an inline hardware helper.
+
+    Function callsites are lowered inline into the caller.
+    """
+
+    def deco(fn: Any) -> Any:
+        if isinstance(name, str) and name.strip():
+            setattr(fn, "__pycircuit_module_name__", str(name).strip())
+        setattr(fn, "__pycircuit_kind__", "function")
+        setattr(fn, "__pycircuit_inline__", True)
+        setattr(fn, "__pycircuit_emit_structural__", False)
+        return fn
+
+    if _fn is None:
+        return deco
+    return deco(_fn)
+
+
+def template(_fn: Any | None = None, *, name: str | None = None) -> Callable[[Any], Any] | Any:
+    """Mark a function as compile-time template logic.
+
+    Template calls execute in Python during JIT and must be pure: they may not
+    emit IR or mutate module interfaces.
+    """
+
+    def deco(fn: Any) -> Any:
+        if isinstance(name, str) and name.strip():
+            setattr(fn, "__pycircuit_module_name__", str(name).strip())
+        setattr(fn, "__pycircuit_kind__", "template")
+        setattr(fn, "__pycircuit_inline__", True)
+        setattr(fn, "__pycircuit_emit_structural__", False)
+        return fn
+
+    if _fn is None:
+        return deco
+    return deco(_fn)
 
 
 def _canon_param(v: Any) -> Any:
@@ -74,6 +118,25 @@ def _base_name(fn: Any) -> str:
     if isinstance(override, str) and override.strip():
         return override.strip()
     return getattr(fn, "__name__", "Module")
+
+
+def _kind_of(fn: Any) -> str:
+    k = getattr(fn, "__pycircuit_kind__", None)
+    if isinstance(k, str):
+        kk = k.strip().lower()
+        if kk in {"module", "function", "template"}:
+            return kk
+    return "module"
+
+
+def _inline_of(fn: Any) -> bool:
+    if _kind_of(fn) == "function":
+        return True
+    return bool(getattr(fn, "__pycircuit_inline__", False))
+
+
+def _emit_structural_of(fn: Any) -> bool:
+    return bool(getattr(fn, "__pycircuit_emit_structural__", False))
 
 
 @dataclass(frozen=True)
@@ -222,93 +285,19 @@ class DesignContext:
         params: Mapping[str, Any],
         port_specs: Mapping[str, Any] | None = None,
     ) -> Module:
-        # Prefer AST/JIT compilation when possible, but fall back to elaboration
-        # (executing the function normally) to support large Python helper-heavy designs.
-        from .jit import JitError, compile as jit_compile
+        from .jit import compile as jit_compile
 
-        # JIT compile can specialize child modules incrementally while lowering.
-        # If it fails part-way, rollback specialization registries so elaboration
-        # fallback can retry without duplicate explicit module-name collisions.
-        cache_before = dict(self._cache)
-        used_sym_before = set(self._used_sym_names)
-        mods_before = dict(self.design._mods)
-        try:
-            return jit_compile(fn, module_name=sym_name, design_ctx=self, port_specs=port_specs, **params)
-        except JitError:
-            self._cache = cache_before
-            self._used_sym_names = used_sym_before
-            self.design._mods = mods_before
-            # Elaboration fallback.
-            from .hw import Circuit, Reg, Wire
-
-            m = Circuit(sym_name, design_ctx=self)
-            port_bindings: dict[str, Any] = {}
-            for pname, spec_any in dict(port_specs or {}).items():
-                if not isinstance(spec_any, dict):
-                    raise DesignError(f"invalid signature-bound port spec for {pname!r}: expected dict")
-                kind = str(spec_any.get("kind", "")).strip()
-                if kind == "clock":
-                    port_bindings[pname] = m.clock(pname)
-                    continue
-                if kind == "reset":
-                    port_bindings[pname] = m.reset(pname)
-                    continue
-                if kind == "wire":
-                    ty = str(spec_any.get("ty", "")).strip()
-                    if not ty.startswith("i"):
-                        raise DesignError(f"invalid integer type in signature-bound port {pname!r}: {ty!r}")
-                    try:
-                        width = int(ty[1:])
-                    except ValueError as e:
-                        raise DesignError(f"invalid integer width in signature-bound port {pname!r}: {ty!r}") from e
-                    if width <= 0:
-                        raise DesignError(f"invalid integer width in signature-bound port {pname!r}: {ty!r}")
-                    signed = bool(spec_any.get("signed", False))
-                    port_bindings[pname] = m.input(pname, width=width, signed=signed)
-                    continue
-                raise DesignError(f"unsupported signature-bound port kind for {pname!r}: {kind!r}")
-
-            # Bind using Python's own semantics.
-            try:
-                bind_kwargs = dict(params)
-                bind_kwargs.update(port_bindings)
-                bound = inspect.signature(fn).bind(m, **bind_kwargs)
-            except TypeError as e:
-                raise DesignError(f"failed to bind module params for {getattr(fn, '__name__', fn)!r}: {e}") from e
-            bound.apply_defaults()
-            ret = fn(*bound.args, **bound.kwargs)
-
-            # Allow returning a Module/Circuit explicitly.
-            if isinstance(ret, Module):
-                m = ret  # type: ignore[assignment]
-
-            # Allow returning wires/regs as outputs when no explicit outputs were used.
-            if getattr(m, "_results", []):  # noqa: SLF001
-                return m
-            if ret is None:
-                return m
-            returned: list[Any] = []
-            if isinstance(ret, tuple):
-                returned.extend(ret)
-            else:
-                returned.append(ret)
-            if len(returned) == 1:
-                v0 = returned[0]
-                if isinstance(v0, Reg):
-                    v0 = v0.q
-                m.output("out", v0)
-            else:
-                for i, v in enumerate(returned):
-                    if isinstance(v, Reg):
-                        v = v.q
-                    m.output(f"out{i}", v)
-            return m
+        return jit_compile(fn, module_name=sym_name, design_ctx=self, port_specs=port_specs, **params)
 
     def _finalize_compiled(self, fn: Any, *, sym_name: str, params_json: str, base: str, mod: Module) -> CompiledModule:
         # Attach debug attributes (emitted in func.func header).
         try:
             mod.set_func_attr("pyc.base", base)
             mod.set_func_attr("pyc.params", params_json)
+            mod.set_func_attr("pyc.kind", _kind_of(fn))
+            mod.set_func_attr("pyc.inline", "true" if _inline_of(fn) else "false")
+            if _emit_structural_of(fn):
+                mod.set_func_attr("pyc.emit.structural", "true")
         except Exception as e:
             raise DesignError(f"failed to set module attrs for {sym_name!r}: {e}") from e
 

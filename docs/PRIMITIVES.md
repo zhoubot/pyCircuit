@@ -80,7 +80,7 @@ stable “template library” layer for hand-written designs or future lowering.
 - Verilog: `module pyc_fifo #(WIDTH, DEPTH) (...)`
 - C++: `pyc::cpp::pyc_fifo<Width, Depth>` (`runtime/cpp/pyc_primitives.hpp`)
 
-Ports (explicit, for compatibility with simple codegen):
+Ports (explicit, for simple codegen):
 
 - `clk`, `rst`
 - input: `in_valid`, `in_ready`, `in_data`

@@ -1,265 +1,82 @@
-# pyCircuit Compiler Flow (Refactored)
+# pyCircuit v3.1 Compiler Flow
 
-This document is the source-of-truth for the refactored pyCircuit flow in this repository.
+This document describes the current strict frontend + MLIR flow.
 
-It reflects the current implementation in:
+## 1) End-to-end pipeline
 
-- `compiler/frontend/pycircuit/cli.py`
-- `compiler/frontend/pycircuit/jit.py`
-- `compiler/mlir/tools/pyc-compile.cpp`
-- `compiler/mlir/lib/Transforms/*.cpp`
+1. Python frontend compiles `@module` top entry via JIT to `.pyc` MLIR.
+2. `pyc-compile` runs legality/optimization passes.
+3. Emitters write split Verilog/C++ artifacts (per-module by default in out-dir mode).
+4. Flow scripts build and run generated simulations/regressions.
 
-## 1) End-to-end flow
+## 2) Frontend semantics
 
-1. Python frontend elaborates/JIT-compiles a design to MLIR (`.pyc`).
-2. `pyc-compile` runs the MLIR pass pipeline.
-3. `pyc-compile` emits Verilog or C++ artifacts.
-4. Optional flow scripts build and run testbenches from emitted artifacts.
+Top entry contract:
+- `@module def build(m: Circuit, ...)`
+- no non-JIT fallback path
 
-## 2) Repository entrypoints (current)
+Call-kind semantics:
+- `@module`: hierarchy boundary, lowered as instances
+- `@function`: inline helper
+- `@template`: compile-time helper, no IR emission allowed
 
-- Frontend CLI: `python3 -m pycircuit.cli` (module path under `compiler/frontend/`)
-- Compiler: `build/bin/pyc-compile`
-- Convenience wrapper: `flows/scripts/pyc`
-- Flow runner: `python3 flows/tools/pyc_flow.py`
-- Runtime libraries:
-  - C++: `runtime/cpp/`
-  - Verilog primitives: `runtime/verilog/`
+Inter-module ports:
+- Must be connector-based (`Connector` family)
+- Raw cross-module `Wire/Reg` connections are rejected
 
-Legacy paths (`python/pycircuit`, `pyc/mlir`, `include/pyc`, `tools/`, `scripts/`, `examples/`, `janus/`) are no longer the canonical flow.
+## 3) Template call path
 
-## 3) Frontend flow
+When JIT sees a call to a `@template` function:
+- Evaluates the call in Python at compile time.
+- Validates purity by checking module state snapshots (`_lines`, `_next_tmp`, `_args`, `_results`).
+- Raises hard error if template emitted IR or mutated module interface.
+- Enforces template return contract (primitive/allowed container values only).
+- Memoizes per-compile call results by function identity + canonicalized arguments.
 
-## 3.1 `pycircuit emit`
+Guarantee:
+- Template logic contributes no MLIR ops and therefore no C++/Verilog emission.
 
-`pycircuit emit <design.py> -o <out.pyc>` loads `build(...)` from the Python source and emits MLIR.
+## 4) CLI entrypoints
 
-Behavior:
+Frontend emit:
 
-- JIT-by-default for `build(m: Circuit, ...)` signatures.
-- All non-builder parameters must have defaults (or be overridden by `--param name=value`).
-- Multi-module compilation is rooted through `compile_design(...)`, producing one MLIR `module` with multiple `func.func` symbols and `pyc.instance` hierarchy edges.
-
-## 3.2 Call semantics in JIT frontend
-
-Default behavior in design context:
-
-- Plain function call `child(m, ...)` auto-instantiates a module instance.
-- Hardware values (`Wire`/`Reg`/`Signal`/`Vec`/`Bundle`) become instance ports.
-- Python literal specialization values become specialization parameters.
-- Instance names are deterministic callsite names: `<callee>__L<line>__N<idx>` (scope-prefixed).
-- For complex specialization objects, use explicit `Circuit.instance(..., params=...)`.
-
-Escape hatch:
-
-- `@jit_inline` forces inline expansion into the current module body.
-
-## 3.3 Debug export contract
-
-`Circuit.debug(name, signal)` exports stable debug outputs named as `dbg__*` ports. These probes are intended for direct TB/tracing visibility and remain observable to optimization passes through normal module outputs.
-
-Additional helpers for large probe sets:
-
-- `Circuit.debug_bundle(prefix, fields)` emits `dbg__<prefix>_<field>` for each mapping entry.
-- `Circuit.debug_probe(stage, lane, fields, family="pv")` emits canonical pipeview names:
-  - `dbg__<family>_<stage>_<field>_lane<k>_<stage>`
-- `Circuit.debug_occ(stage, lane, fields)` is a convenience wrapper for:
-  - `dbg__occ_<stage>_<field>_lane<k>_<stage>`
-
-## 4) `pyc-compile` modes and outputs
-
-## 4.1 Core CLI options
-
-- `--emit=verilog|cpp`
-- `--out-dir=<dir>` (split-per-module output + `manifest.json`)
-- `--cpp-split=module|none` (default `module` for `--emit=cpp --out-dir`)
-- `--cpp-shard-threshold-lines=<N>` (default `120000`)
-- `--cpp-shard-threshold-bytes=<N>` (default `4194304`)
-- `--cpp-manifest=<path>` (default `<out-dir>/cpp_compile_manifest.json`)
-- `-o <file>` (single-file emission)
-- `--sim-mode=default|cpp-only`
-- `--cpp-only-preserve-ops`
-- `--logic-depth=<N>` (default 32)
-
-## 4.2 Mode semantics
-
-- `--sim-mode=default`: normal behavior.
-- `--sim-mode=cpp-only`:
-  - still runs safety/legality/depth/stats passes;
-  - Verilog emission is rejected;
-  - comb fusion is ON by default for speed.
-- `--cpp-only-preserve-ops`:
-  - valid with `--sim-mode=cpp-only`;
-  - disables `FuseComb` to keep operation-granular scheduling.
-
-## 4.3 Stats outputs
-
-All compiles report stats in stderr summary and JSON:
-
-- `--out-dir=<dir>` writes `<dir>/compile_stats.json`
-- `--emit=cpp --out-dir=<dir>` also writes `<dir>/cpp_compile_manifest.json`
-- `-o <file>` writes `<file>.stats.json`
-
-`cpp_compile_manifest.json` schema:
-
-- `version`
-- `target_name`
-- `cxx_standard`
-- `include_dirs`
-- `compile_defines`
-- `sources[]` with `{path,module,shard,kind}`
-- `top_header`
-- `deterministic_hash`
-
-Current JSON fields:
-
-- `reg_count`, `reg_bits`
-- `mem_count`, `mem_bits`
-- `logic_depth_limit`, `max_logic_depth`
-- `wns`, `tns`
-- `fuse_comb_enabled`
-
-## 5) Default pass pipeline (exact order)
-
-From `compiler/mlir/tools/pyc-compile.cpp`:
-
-```text
-Inliner
-Canonicalizer
-CSE
-SCCP
-RemoveDeadValues
-SymbolDCE
-LowerSCFToPYCStatic
-EliminateWires
-EliminateDeadState
-CombCanonicalize
-SLPPackWires
-CheckCombCycles
-PackI1Regs
-FuseComb (enabled unless cpp-only + cpp-only-preserve-ops)
-Canonicalizer
-CSE
-RemoveDeadValues
-SymbolDCE
-CheckFlatTypes
-CheckNoDynamic
-CheckLogicDepth
-CollectCompileStats
+```bash
+PYTHONPATH=compiler/frontend python3 -m pycircuit.cli emit <design.py> -o <out.pyc>
 ```
 
-## 6) Pass-by-pass reference
+Backend compile:
 
-1. `Inliner`:
-- Inlines `func.call` bodies where legal.
-- Normalizes IR before PYC-specific transforms.
+```bash
+build/bin/pyc-compile <out.pyc> --emit=cpp --out-dir <dir> --cpp-split=module
+build/bin/pyc-compile <out.pyc> --emit=verilog --out-dir <dir>
+```
 
-2. `Canonicalizer` (first):
-- Canonical MLIR simplifications and fold opportunities.
+## 5) Default compile behavior
 
-3. `CSE` (first):
-- Eliminates duplicate computations.
+Key defaults for large designs:
+- Split C++/Verilog out-dir emission.
+- Per-module C++ artifacts plus manifest (`cpp_compile_manifest.json`).
+- Shard support for oversized generated modules.
 
-4. `SCCP`:
-- Sparse conditional constant propagation to reduce dead/control-constant logic.
+Common options:
+- `--emit=cpp|verilog`
+- `--out-dir=<dir>`
+- `--cpp-split=module|none`
+- `--cpp-shard-threshold-lines=<N>`
+- `--cpp-shard-threshold-bytes=<N>`
+- `--logic-depth=<N>`
+- `--sim-mode=default|cpp-only`
+- `--emit-structural=auto|on|off`
 
-5. `RemoveDeadValues` (first):
-- Deletes IR values no longer observable.
+## 6) Hygiene and regression gates
 
-6. `SymbolDCE` (first):
-- Removes unreferenced symbol ops.
+- API hygiene: `python3 flows/tools/check_api_hygiene.py`
+- Example sweep: `bash flows/scripts/run_examples.sh`
+- Linx CPU C++ flow: `bash flows/tools/run_linx_cpu_pyc_cpp.sh`
+- FastFwd C++ flow: `bash flows/tools/run_fastfwd_pyc_cpp.sh`
+- Perf smoke: `python3 flows/tools/perf/run_perf_smoke.py`
 
-7. `LowerSCFToPYCStatic` (`pyc-lower-scf-static`):
-- Lowers `scf.for` to static unrolling.
-- Lowers `scf.if` to static structure (`pyc.mux`) or constant-chosen branch.
-- Fails if loop bounds/steps are non-constant, induction variable is used dynamically, side-effectful ops appear in staticized regions, or SCF remains.
+## 7) Fresh-start scope
 
-8. `EliminateWires` (`pyc-eliminate-wires`):
-- Removes trivial `pyc.wire` + `pyc.assign` pairs.
-- Preserves naming by inserting `pyc.alias` when wire has `pyc.name`.
-- Conservative: only safe single-driver cases are rewritten.
-
-9. `EliminateDeadState` (`pyc-eliminate-dead-state`):
-- Removes unobservable stateful ops (`pyc.reg`, fifo/mem/cdc primitives).
-- Honors `pyc.debug_keep=true` to preserve debug-visible state.
-
-10. `CombCanonicalize` (`pyc-comb-canonicalize`):
-- Boolean/mux rewrites on PYC comb ops.
-- Examples: redundant mux collapse, i1 mux to logic gates, simple xor/xnor factoring.
-
-11. `SLPPackWires` (`pyc-slp-pack-wires`):
-- Current implementation is a conservative scaffold.
-- No profitability packing rewrites are applied yet.
-
-12. `CheckCombCycles` (`pyc-check-comb-cycles`):
-- Detects combinational wire/assign cycles without sequential breaks.
-- Emits explicit cycle path diagnostics and fails compile on cycle.
-
-13. `PackI1Regs` (`pyc-pack-i1-regs`):
-- Packs compatible runs of i1 registers (same clk/rst/en) into one wider reg.
-- Rebuilds bit extracts and aliases to preserve behavior and naming.
-
-14. `FuseComb` (`pyc-fuse-comb`):
-- Fuses runs of fusable combinational ops into `pyc.comb` regions.
-- Improves backend code size/compile speed for large designs.
-- Disabled only when `--sim-mode=cpp-only --cpp-only-preserve-ops`.
-
-15. `Canonicalizer` (second):
-- Cleans IR after PYC structural transforms.
-
-16. `CSE` (second):
-- Removes post-fusion/post-pack duplicate expressions.
-
-17. `RemoveDeadValues` (second):
-- Removes newly dead intermediate values.
-
-18. `SymbolDCE` (second):
-- Removes newly dead symbols after cleanup.
-
-19. `CheckFlatTypes` (`pyc-check-flat-types`):
-- Requires only flat hardware types (`iN`, `!pyc.clock`, `!pyc.reset`) at interfaces and op operands/results.
-- Fails if aggregates/unsupported types remain.
-
-20. `CheckNoDynamic` (`pyc-check-no-dynamic`):
-- Enforces no remaining SCF dynamic control-flow and no `index`-typed hardware values.
-- Fails on any residual dynamic constructs.
-
-21. `CheckLogicDepth` (`pyc-check-logic-depth`):
-- Computes combinational depth between sequential boundaries.
-- Unit cost for comb ops; zero cost for wires/aliases/constants/sequential ops.
-- Emits per-function attrs: `pyc.logic_depth.max`, `pyc.logic_depth.wns`, `pyc.logic_depth.tns`.
-- Fails compile when any endpoint depth exceeds `--logic-depth`.
-
-22. `CollectCompileStats` (`pyc-collect-compile-stats`):
-- Counts registers/memories and bit totals.
-- Emits attrs consumed by final stats summary/JSON.
-
-## 9) C++ Runtime Scheduling Notes
-
-Generated C++ `eval()` uses:
-
-- topological single-pass schedule when acyclic;
-- fallback fixed-point for cyclic graphs (fidelity default);
-- optional SCC worklist fallback when `PYC_SIM_FAST=1` (or disabled with
-  `-DPYC_DISABLE_SCC_WORKLIST_EVAL`).
-
-Perf/debug runtime controls:
-
-- `PYC_SIM_STATS=1`
-- `PYC_SIM_STATS_PATH=<path>`
-- `PYC_SIM_FAST=1`
-
-## 10) Non-default pass
-
-`PrunePorts` (`pyc-prune-ports`) exists but is intentionally OFF in default `pyc-compile` pipeline because it changes public module interfaces by deleting unused function arguments and rewriting callsites.
-
-## 11) Out-of-tree generated artifact policy
-
-Generated outputs are local artifacts and must not be checked into git.
-
-Default output root used by flow scripts:
-
-- `.pycircuit_out/examples/...`
-- `.pycircuit_out/linxcore/...`
-
-The repo `.gitignore` enforces this policy.
+v3.1 intentionally removes migration-era surfaces from frontend and flow tooling.
+Use only current APIs and connector/template semantics.

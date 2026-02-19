@@ -39,6 +39,10 @@ def main() -> int:
         if cur_case is None:
             failures.append(f"{case_name}: missing in current results")
             continue
+        if bool(cur_case.get("skipped", False)):
+            reason = str(cur_case.get("skip_reason", "unspecified"))
+            print(f"perf regression: skipping case {case_name} ({reason})")
+            continue
 
         for key in TIME_KEYS:
             if key not in base_case or key not in cur_case:

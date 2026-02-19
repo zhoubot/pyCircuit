@@ -29,6 +29,7 @@ def _detect_pyc_compile(root: Path) -> Path:
     candidates = [
         root / "build" / "bin" / "pyc-compile",
         root / "compiler" / "mlir" / "build" / "bin" / "pyc-compile",
+        root / "compiler" / "mlir" / "build2" / "bin" / "pyc-compile",
         root / "build-top" / "bin" / "pyc-compile",
     ]
     best: Path | None = None
@@ -114,9 +115,10 @@ def _run_linx_case(
     out_dir = root / ".pycircuit_out" / "perf" / "linx_cpu"
     out_dir.mkdir(parents=True, exist_ok=True)
     pyc_path = out_dir / "linx_cpu_pyc.pyc"
-    hdr_path = out_dir / "linx_cpu_pyc_gen.hpp"
+    cpp_out_dir = out_dir / "cpp"
+    manifest_path = cpp_out_dir / "cpp_compile_manifest.json"
     tb_path = out_dir / f"tb_linx_cpu_pyc_cpp_{profile}"
-    stats_path = Path(str(hdr_path) + ".stats.json")
+    stats_path = cpp_out_dir / "compile_stats.json"
 
     env_emit = os.environ.copy()
     env_emit["PYTHONDONTWRITEBYTECODE"] = "1"
@@ -145,26 +147,31 @@ def _run_linx_case(
             "--emit=cpp",
             f"--sim-mode={sim_mode}",
             f"--logic-depth={logic_depth}",
-            "-o",
-            str(hdr_path),
+            "--out-dir",
+            str(cpp_out_dir),
+            "--cpp-split=module",
         ],
         cwd=root,
         env=os.environ.copy(),
     )
 
-    cxx = os.environ.get("CXX", "clang++")
+    build_cmd = [
+        sys.executable,
+        str(root / "flows" / "tools" / "build_cpp_manifest.py"),
+        "--manifest",
+        str(manifest_path),
+        "--tb",
+        str(root / "designs" / "examples" / "linx_cpu_pyc" / "tb_linx_cpu_pyc.cpp"),
+        "--out",
+        str(tb_path),
+        "--profile",
+        profile,
+        "--extra-include",
+        str(root / "runtime"),
+    ]
+
     tb_build_s, _ = _run(
-        [
-            cxx,
-            *_build_flags(profile),
-            "-I",
-            str(root / "runtime"),
-            "-I",
-            str(out_dir),
-            "-o",
-            str(tb_path),
-            str(root / "designs" / "examples" / "linx_cpu_pyc" / "tb_linx_cpu_pyc.cpp"),
-        ],
+        build_cmd,
         cwd=root,
         env=os.environ.copy(),
     )
@@ -190,6 +197,9 @@ def _run_linx_case(
     cycles = _parse_cycles(sim_out)
     end_to_end_s = emit_s + compile_s + tb_build_s + sim_s
     cps = (cycles / sim_s) if sim_s > 0 else 0.0
+    split_sources = list(cpp_out_dir.glob("*.cpp"))
+    split_headers = list(cpp_out_dir.glob("*.hpp"))
+    total_loc = sum(_count_lines(p) for p in [*split_sources, *split_headers])
 
     return {
         "emit_s": emit_s,
@@ -201,7 +211,9 @@ def _run_linx_case(
         "cycles_per_sec": cps,
         "perf_repeats": int(perf_repeats),
         "perf_max_cycles": int(perf_max_cycles),
-        "header_loc": _count_lines(hdr_path),
+        "header_loc": total_loc,
+        "split_cpp_count": len(split_sources),
+        "split_hpp_count": len(split_headers),
         "compile_stats": _stats(stats_path),
     }
 
@@ -217,6 +229,30 @@ def _run_linxcore_case(
 ) -> dict[str, Any]:
     out_dir = root / ".pycircuit_out" / "perf" / "linxcore"
     out_dir.mkdir(parents=True, exist_ok=True)
+    bench_build = root / "designs" / "linxcore" / "tools" / "image" / "build_linxisa_benchmarks_memh_compat.sh"
+    gen_update = root / "designs" / "linxcore" / "tools" / "generate" / "update_generated_linxcore.sh"
+    run_cpp = root / "designs" / "linxcore" / "tools" / "generate" / "run_linxcore_top_cpp.sh"
+
+    def _skipped(reason: str) -> dict[str, Any]:
+        return {
+            "emit_s": 0.0,
+            "compile_s": 0.0,
+            "tb_build_s": 0.0,
+            "sim_s": 0.0,
+            "end_to_end_s": 0.0,
+            "cycles": 0,
+            "cycles_per_sec": 0.0,
+            "perf_repeats": int(perf_repeats),
+            "perf_max_cycles": int(perf_max_cycles),
+            "header_loc": 0,
+            "compile_stats": {},
+            "skipped": True,
+            "skip_reason": reason,
+        }
+
+    for required in (bench_build, gen_update, run_cpp):
+        if not required.is_file():
+            return _skipped(f"missing script: {required}")
 
     env_run = os.environ.copy()
     env_run["PYC_COMPILE"] = str(pyc_compile)
@@ -226,30 +262,39 @@ def _run_linxcore_case(
     env_run["CORE_ITERATIONS"] = str(int(perf_repeats))
     env_run["DHRY_RUNS"] = str(int(perf_repeats) * 100)
 
-    emit_s, bench_build_out = _run(
-        ["bash", str(root / "designs" / "linxcore" / "tools" / "image" / "build_linxisa_benchmarks_memh_compat.sh")],
-        cwd=root,
-        env=env_run,
-        capture_stdout=True,
-    )
+    try:
+        emit_s, bench_build_out = _run(
+            ["bash", str(bench_build)],
+            cwd=root,
+            env=env_run,
+            capture_stdout=True,
+        )
+    except subprocess.CalledProcessError as e:
+        return _skipped(f"linxcore benchmark build failed (rc={e.returncode})")
     memh_lines = [ln.strip() for ln in bench_build_out.splitlines() if ln.strip()]
     if len(memh_lines) < 2:
-        raise RuntimeError("failed to build linxcore benchmark memh")
+        return _skipped("failed to build linxcore benchmark memh")
     perf_memh = memh_lines[1]
 
-    compile_s, _ = _run(
-        ["bash", str(root / "designs" / "linxcore" / "tools" / "generate" / "update_generated_linxcore.sh")],
-        cwd=root,
-        env=env_run,
-    )
+    try:
+        compile_s, _ = _run(
+            ["bash", str(gen_update)],
+            cwd=root,
+            env=env_run,
+        )
+    except subprocess.CalledProcessError as e:
+        return _skipped(f"linxcore generate step failed (rc={e.returncode})")
 
     tb_build_s = 0.0
-    sim_s, sim_out = _run(
-        ["bash", str(root / "designs" / "linxcore" / "tools" / "generate" / "run_linxcore_top_cpp.sh"), perf_memh],
-        cwd=root,
-        env=env_run,
-        capture_stdout=True,
-    )
+    try:
+        sim_s, sim_out = _run(
+            ["bash", str(run_cpp), perf_memh],
+            cwd=root,
+            env=env_run,
+            capture_stdout=True,
+        )
+    except subprocess.CalledProcessError as e:
+        return _skipped(f"linxcore simulation failed (rc={e.returncode})")
     cycles = _parse_cycles(sim_out)
     end_to_end_s = emit_s + compile_s + tb_build_s + sim_s
     cps = (cycles / sim_s) if sim_s > 0 else 0.0
