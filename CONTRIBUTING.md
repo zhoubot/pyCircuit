@@ -5,7 +5,7 @@ Small, focused changes with good tests/examples are preferred.
 
 ## Development setup
 
-### Build `pyc-compile`
+### Build `pycc`
 
 You need an LLVM+MLIR installation/build that provides `LLVMConfig.cmake` and `MLIRConfig.cmake`.
 
@@ -18,7 +18,7 @@ cmake -G Ninja -S . -B build \
   -DLLVM_DIR="$LLVM_DIR" \
   -DMLIR_DIR="$MLIR_DIR"
 
-ninja -C build pyc-compile pyc-opt
+ninja -C build pycc pyc-opt
 ```
 
 ### Regenerate checked-in outputs

@@ -1,40 +1,33 @@
-.PHONY: help configure build tools regen test install package clean
+.PHONY: help configure tools smoke install package clean
 
 BUILD_DIR ?= build
 
 help:
 	@echo "Targets:"
 	@echo "  configure  Configure CMake (needs LLVM_DIR/MLIR_DIR)"
-	@echo "  tools      Build pyc-compile + pyc-opt"
-	@echo "  regen      Regenerate local outputs under ./.pycircuit_out"
-	@echo "  test       Run C++ regressions (linx_cpu + janus)"
+	@echo "  tools      Build pycc + pyc-opt"
+	@echo "  smoke      Run compiler + simulation smoke checks"
 	@echo "  install    Install into dist/pycircuit/"
 	@echo "  package    Build a TGZ via CPack"
 	@echo "  clean      Remove build/ and dist/"
 
 configure:
 	@if [ -z "$$LLVM_DIR" ] || [ -z "$$MLIR_DIR" ]; then \
-	  echo "error: set LLVM_DIR and MLIR_DIR (see README.md)"; \
+	  echo "error: set LLVM_DIR and MLIR_DIR"; \
 	  exit 2; \
 	fi
 	cmake -G Ninja -S . -B "$(BUILD_DIR)" \
 	  -DCMAKE_BUILD_TYPE=Release \
 	  -DLLVM_DIR="$$LLVM_DIR" \
-	  -DMLIR_DIR="$$MLIR_DIR" \
-	  -DPYC_BUILD_CPP_EXAMPLES=OFF
+	  -DMLIR_DIR="$$MLIR_DIR"
 
 tools: configure
-	ninja -C "$(BUILD_DIR)" pyc-compile pyc-opt
+	ninja -C "$(BUILD_DIR)" pycc
+	ninja -C "$(BUILD_DIR)" pyc-opt 2>/dev/null || true
 
-regen: tools
-	PYC_COMPILE="$(BUILD_DIR)/bin/pyc-compile" bash designs/examples/update_generated.sh
-	PYC_COMPILE="$(BUILD_DIR)/bin/pyc-compile" bash designs/janus/update_generated.sh
-
-test: tools
-	PYC_COMPILE="$(BUILD_DIR)/bin/pyc-compile" bash flows/tools/run_linx_cpu_pyc_cpp.sh
-	PYC_COMPILE="$(BUILD_DIR)/bin/pyc-compile" bash flows/tools/run_fastfwd_pyc_cpp.sh
-	PYC_COMPILE="$(BUILD_DIR)/bin/pyc-compile" bash designs/janus/tools/run_janus_bcc_pyc_cpp.sh
-	PYC_COMPILE="$(BUILD_DIR)/bin/pyc-compile" bash designs/janus/tools/run_janus_bcc_ooo_pyc_cpp.sh
+smoke: tools
+	PYCC="$(BUILD_DIR)/bin/pycc" bash flows/scripts/run_examples.sh
+	PYCC="$(BUILD_DIR)/bin/pycc" bash flows/scripts/run_sims.sh
 
 install: tools
 	cmake --install "$(BUILD_DIR)" --prefix dist/pycircuit
@@ -44,3 +37,4 @@ package: tools
 
 clean:
 	rm -rf "$(BUILD_DIR)" dist
+

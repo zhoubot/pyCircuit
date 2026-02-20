@@ -1,18 +1,18 @@
 from __future__ import annotations
 
-from pycircuit import Circuit, compile, meta, module, const, u
+from pycircuit import Circuit, compile, const, module, spec, u, wiring
 
 
 @const
 def _unit_in_spec(m: Circuit, *, width: int):
     _ = m
-    return meta.struct("unit_in").field("x", width=width).build()
+    return spec.struct("unit_in").field("x", width=width).build()
 
 
 @const
 def _unit_out_spec(m: Circuit, *, width: int):
     _ = m
-    return meta.struct("unit_out").field("y", width=width).field("valid", width=1).build()
+    return spec.struct("unit_out").field("y", width=width).field("valid", width=1).build()
 
 
 @module(structural=True)
@@ -30,7 +30,7 @@ def _unit(m: Circuit, *, width: int = 32, gain: int = 1):
 @const
 def _top_struct(m: Circuit, *, width: int):
     _ = m
-    s = meta.struct("top_units").field("alu", width=width).field("bru", width=width).build()
+    s = spec.struct("top_units").field("alu", width=width).field("bru", width=width).build()
     return s.add_field("lsu", width=width).rename_field("bru", "branch").select_fields(["alu", "branch", "lsu"])
 
 
@@ -39,7 +39,7 @@ def build(m: Circuit, *, width: int = 32):
     top_spec = _top_struct(m, width=width)
     top_in = m.inputs(top_spec, prefix="in_")
 
-    family = meta.module_family("unit_family", module=_unit, params={"width": int(width)})
+    family = spec.module_family("unit_family", module=_unit, params={"width": int(width)})
     dict_spec = family.dict(
         {
             "alu": {"gain": 1},
@@ -53,7 +53,7 @@ def build(m: Circuit, *, width: int = 32):
     per_unit: dict[str, dict[str, object]] = {}
     for key in dict_spec.keys():
         per_unit[key] = {
-            "in": meta.bind(unit_in, {"x": top_in[key]}),
+            "in": wiring.bind(unit_in, {"x": top_in[key]}),
         }
 
     insts = m.array(

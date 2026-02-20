@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from pycircuit import Cache, Circuit, Connector, compile, ct, function, meta, module, const, u
+from pycircuit import Circuit, Connector, Tb, compile, const, ct, function, module, spec, testbench, u
+from pycircuit.lib import Cache
 
 
 @function
@@ -14,15 +15,15 @@ def _mix3(m: Circuit, a, b, c):
 @const
 def _lane_pipe_spec(m: Circuit, *, width: int):
     _ = m
-    payload = meta.bundle("lane_payload").field("data", width=width).build()
-    return meta.stage_pipe("lane_pipe", payload=payload, has_valid=True, has_ready=False)
+    payload = spec.bundle("lane_payload").field("data", width=width).build()
+    return spec.stage_pipe("lane_pipe", payload=payload, has_valid=True, has_ready=False)
 
 
 @const
 def _top_in_struct(m: Circuit, *, width: int):
     _ = m
     return (
-        meta.struct("top_in")
+        spec.struct("top_in")
         .field("seed", width=width)
         .field("enable", width=1)
         .build()
@@ -33,7 +34,7 @@ def _top_in_struct(m: Circuit, *, width: int):
 @const
 def _top_out_struct(m: Circuit, *, width: int):
     _ = m
-    base = meta.struct("top_out").field("value", width=width).field("hit", width=1).build()
+    base = spec.struct("top_out").field("value", width=width).field("hit", width=1).build()
     return base.rename_field("value", "out").drop_fields(["hit"]).add_field("cache_hit", width=1)
 
 
@@ -48,15 +49,15 @@ def _stress_cfg(
     cache_sets: int,
 ):
     _ = m
-    spec = (
-        meta.params()
+    ps = (
+        spec.params()
         .add("module_count", default=16, min_value=1)
         .add("hierarchy_depth", default=2, min_value=0)
         .add("fanout", default=2, min_value=1)
         .add("cache_ways", default=4, min_value=1)
         .add("cache_sets", default=64, min_value=1)
     )
-    return spec.build(
+    return ps.build(
         {
             "module_count": int(module_count),
             "hierarchy_depth": int(hierarchy_depth),
@@ -73,17 +74,15 @@ def _leaf(m: Circuit, clk, rst, x, *, width: int = 64):
     rst_v = rst.read() if isinstance(rst, Connector) else rst
     x_v = x.read() if isinstance(x, Connector) else x
 
-    clk_c = m.as_connector(clk_v, name="clk")
-    rst_c = m.as_connector(rst_v, name="rst")
     ps = _lane_pipe_spec(m, width=width)
     staged = m.pipe(
         ps,
         m.bundle_connector(
-            data=m.as_connector(x_v, name="data"),
-            valid=m.as_connector(u(1, 1), name="valid"),
+            data=x_v,
+            valid=u(1, 1),
         ),
-        clk=clk_c,
-        rst=rst_c,
+        clk=clk_v,
+        rst=rst_v,
         prefix="leaf_stg_",
     )
 
@@ -105,18 +104,15 @@ def _node(
     depth: int = 2,
 ):
     x_v = x.read() if isinstance(x, Connector) else x
-    clk_c = m.as_connector(clk, name="clk")
-    rst_c = m.as_connector(rst, name="rst")
 
     fan = max(1, int(fanout))
     children = []
     for i in range(fan):
         xin = (x_v + u(width, i + 1))[0:width]
-        xin_c = m.as_connector(xin, name=f"x{i}")
         if depth <= 0:
-            child = _leaf(m, clk=clk_c, rst=rst_c, x=xin_c, width=width)
+            child = _leaf(m, clk=clk, rst=rst, x=xin, width=width)
         else:
-            child = _node(m, clk=clk_c, rst=rst_c, x=xin_c, width=width, fanout=fanout, depth=depth - 1)
+            child = _node(m, clk=clk, rst=rst, x=xin, width=width, fanout=fanout, depth=depth - 1)
         children.append(child)
 
     y = x_v
@@ -139,8 +135,6 @@ def build(
 ):
     clk = m.clock("clk")
     rst = m.reset("rst")
-    clk_c = m.as_connector(clk, name="clk")
-    rst_c = m.as_connector(rst, name="rst")
 
     in_spec = _top_in_struct(m, width=width)
     top_in = m.inputs(in_spec, prefix="")
@@ -160,20 +154,20 @@ def build(
     ways_cfg = int(cfg["cache_ways"])
     sets_cfg = int(cfg["cache_sets"])
 
-    family = meta.module_family("stress_node", module=_node, params={"width": int(width), "fanout": fan_cfg, "depth": depth_cfg})
+    family = spec.module_family("stress_node", module=_node, params={"width": int(width), "fanout": fan_cfg, "depth": depth_cfg})
     node_list = family.list(max(1, nmods), name="stress_nodes")
 
     per_instance: dict[str, dict[str, object]] = {}
     seed = top_in["seed"].read()
     for key in node_list.keys():
         idx = int(key)
-        x_i = m.as_connector((seed + u(width, idx + 1))[0:width], name=f"x_{idx}")
+        x_i = (seed + u(width, idx + 1))[0:width]
         per_instance[str(key)] = {"x": x_i}
 
     nodes = m.array(
         node_list,
         name="stress_node",
-        bind={"clk": clk_c, "rst": rst_c},
+        bind={"clk": clk, "rst": rst},
         per=per_instance,
     )
 
@@ -183,17 +177,17 @@ def build(
         cur = _mix3(m, cur, yi.read(), cur.lshr(amount=(i % max(1, width // 8)) + 1))
 
     req_wmask_w = max(1, width // 8)
-    cache_req_wmask = m.as_connector(u(req_wmask_w, ct.bitmask(req_wmask_w)), name="wmask")
-    cache_req_write = m.as_connector(u(1, 0), name="req_write")
-    cache_req_valid = m.as_connector(u(1, 1), name="req_valid")
+    cache_req_wmask = u(req_wmask_w, ct.bitmask(req_wmask_w))
+    cache_req_write = u(1, 0)
+    cache_req_valid = u(1, 1)
     cache = Cache(
         m,
-        clk=clk_c,
-        rst=rst_c,
+        clk=clk,
+        rst=rst,
         req_valid=cache_req_valid,
-        req_addr=m.as_connector(cur, name="req_addr"),
+        req_addr=cur,
         req_write=cache_req_write,
-        req_wdata=m.as_connector(cur, name="req_wdata"),
+        req_wdata=cur,
         req_wmask=cache_req_wmask,
         ways=ways_cfg,
         sets=sets_cfg,
@@ -206,6 +200,15 @@ def build(
 
     out_spec = _top_out_struct(m, width=width)
     m.outputs(out_spec, {"out": out_v, "cache_hit": cache["resp_hit"]}, prefix="")
+
+
+@testbench
+def tb(t: Tb) -> None:
+    t.clock("clk")
+    t.reset("rst", cycles_asserted=2, cycles_deasserted=1)
+    t.drive("seed", 0x1234, at=0)
+    t.timeout(64)
+    t.finish(at=16)
 
 
 if __name__ == "__main__":

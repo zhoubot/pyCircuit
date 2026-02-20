@@ -1,35 +1,36 @@
-# Diagnostics (v3.4)
+# Diagnostics
 
-pyCircuit v3.4 uses one structured diagnostic shape across:
-- API hygiene checker
-- CLI source contract scanner
-- JIT compile errors
-- MLIR frontend-contract verification
+pyCircuit uses one structured, source-located diagnostic style across:
+- API hygiene scan (`flows/tools/check_api_hygiene.py`)
+- CLI pre-JIT contract scan (`pycircuit emit/build`)
+- JIT elaboration errors (Python frontend)
+- MLIR pass errors in `pycc` (backend)
 
-## Diagnostic format
+## Format
 
-Human-readable diagnostics default to:
+Human-readable diagnostics generally look like:
 
 - `path:line:col: [CODE] message`
 - `stage=<stage>`
 - optional source snippet
 - optional `hint: ...`
 
-## Main stages
+## Common stages
 
-- `api-hygiene`: repository/static scan (`check_api_hygiene.py`)
-- `api-contract`: CLI pre-JIT source/import scan
-- `jit`: AST/JIT/frontend semantic errors
-- MLIR pass errors from `pyc-check-frontend-contract` with codes `PYC901`-`PYC910`
+- `api-hygiene`: repository/static scan
+- `api-contract`: CLI pre-JIT scan of entry file + local imports
+- `jit`: frontend elaboration errors
+- MLIR pass errors from `pycc` (for example `pyc-check-frontend-contract`)
 
-## Common failure examples
+## Frontend contract marker
 
-- Removed legacy API use (pre-v3.4 names)
-- `@const` purity violations (IR emission or module mutation)
-- connector boundary/type mismatches
-- MLIR missing `pyc.frontend.api` or mismatched `--require-frontend-api`
+All frontend-emitted `.pyc` files are stamped with a required module attribute:
 
-## Tools
+- `pyc.frontend.contract = "pycircuit"`
+
+If the backend sees a missing/mismatched contract marker, `pycc` fails early.
+
+## Useful commands
 
 Run hygiene scan:
 
@@ -37,8 +38,12 @@ Run hygiene scan:
 python3 /Users/zhoubot/pyCircuit/flows/tools/check_api_hygiene.py
 ```
 
-Compile with strict frontend epoch check (default already v3.4):
+Emit + compile one module:
 
 ```bash
-/Users/zhoubot/pyCircuit/compiler/mlir/build2/bin/pyc-compile in.pyc --emit=cpp --require-frontend-api=v3.4
+PYTHONPATH=/Users/zhoubot/pyCircuit/compiler/frontend \
+python3 -m pycircuit.cli emit /Users/zhoubot/pyCircuit/designs/examples/counter.py -o /tmp/counter.pyc
+
+/Users/zhoubot/pyCircuit/compiler/mlir/build2/bin/pycc /tmp/counter.pyc --emit=cpp --out-dir /tmp/counter_cpp
 ```
+

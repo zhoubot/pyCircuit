@@ -144,13 +144,15 @@ static void computeUniquePortNames(func::FuncOp f, std::vector<std::string> &inN
   NameTable nt;
   inNames.clear();
   outNames.clear();
-  inNames.reserve(f.getNumArguments());
-  outNames.reserve(f.getNumResults());
-  for (auto [i, arg] : llvm::enumerate(f.getArguments())) {
-    (void)arg;
+  auto fTy = f.getFunctionType();
+  unsigned numInputs = fTy.getNumInputs();
+  unsigned numResults = fTy.getNumResults();
+  inNames.reserve(numInputs);
+  outNames.reserve(numResults);
+  for (unsigned i = 0; i < numInputs; ++i) {
     inNames.push_back(nt.unique(getPortName(f, static_cast<unsigned>(i), /*isResult=*/false)));
   }
-  for (unsigned i = 0; i < f.getNumResults(); ++i) {
+  for (unsigned i = 0; i < numResults; ++i) {
     outNames.push_back(nt.unique(getPortName(f, i, /*isResult=*/true)));
   }
 }
@@ -179,7 +181,8 @@ static bool functionHasSequentialState(func::FuncOp f,
   memo[f.getOperation()] = SeqStateKind::Visiting;
   bool hasSeq = false;
 
-  auto bodyBlock = f.getCallableRegion()->empty() ? nullptr : &f.getCallableRegion()->front();
+  Region *callable = f.getCallableRegion();
+  auto bodyBlock = (!callable || callable->empty()) ? nullptr : &callable->front();
   if (!bodyBlock) {
     memo[f.getOperation()] = SeqStateKind::HasSequential;
     return true;
@@ -583,9 +586,13 @@ static LogicalResult emitFunc(func::FuncOp f, llvm::raw_ostream &os) {
       std::vector<std::string> outPorts;
       computeUniquePortNames(callee, inPorts, outPorts);
       if (inPorts.size() != inst.getNumOperands())
-        return inst.emitError("operand count does not match callee signature");
+        return inst.emitError("operand count does not match callee signature: inst=")
+               << inst.getNumOperands() << ", callee=" << inPorts.size()
+               << " (" << callee.getSymName() << ")";
       if (outPorts.size() != inst.getNumResults())
-        return inst.emitError("result count does not match callee signature");
+        return inst.emitError("result count does not match callee signature: inst=")
+               << inst.getNumResults() << ", callee=" << outPorts.size()
+               << " (" << callee.getSymName() << ")";
 
       std::string base = "inst";
       if (auto nameAttr = inst->getAttrOfType<StringAttr>("name"))
@@ -742,7 +749,8 @@ static LogicalResult emitFunc(func::FuncOp f, llvm::raw_ostream &os) {
       instName = sanitizeId(nameAttr.getValue());
     syncMemInstName.try_emplace(mem.getOperation(), instName);
 
-    os << "  pyc::cpp::pyc_sync_mem<" << addrW << ", " << dataW << ", " << depth << "> " << instName << ";\n";
+    os << "  pyc::cpp::pyc_sync_mem<" << addrW << ", " << dataW << ", " << depth << "> *" << instName
+       << " = nullptr;\n";
   }
   for (auto mem : syncMemDPs) {
     auto addrTy = dyn_cast<IntegerType>(mem.getRaddr0().getType());
@@ -766,7 +774,8 @@ static LogicalResult emitFunc(func::FuncOp f, llvm::raw_ostream &os) {
       instName = sanitizeId(nameAttr.getValue());
     syncMemDPInstName.try_emplace(mem.getOperation(), instName);
 
-    os << "  pyc::cpp::pyc_sync_mem_dp<" << addrW << ", " << dataW << ", " << depth << "> " << instName << ";\n";
+    os << "  pyc::cpp::pyc_sync_mem_dp<" << addrW << ", " << dataW << ", " << depth << "> *" << instName
+       << " = nullptr;\n";
   }
   for (auto fifo : asyncFifos) {
     unsigned w = bitWidth(fifo.getOutData().getType());
@@ -864,6 +873,16 @@ static LogicalResult emitFunc(func::FuncOp f, llvm::raw_ostream &os) {
   for (auto r : regs)
     os << "    if (!" << nt.get(r.getQ()) << "_inst) { std::cerr << \"pyc null reg binding: " << nt.get(r.getQ())
        << "_inst\" << \"\\n\"; std::abort(); }\n";
+  for (auto mem : syncMems) {
+    std::string instName = syncMemInstName.lookup(mem.getOperation());
+    os << "    if (!" << instName << ") { std::cerr << \"pyc null sync_mem binding: " << instName
+       << "\" << \"\\n\"; std::abort(); }\n";
+  }
+  for (auto mem : syncMemDPs) {
+    std::string instName = syncMemDPInstName.lookup(mem.getOperation());
+    os << "    if (!" << instName << ") { std::cerr << \"pyc null sync_mem_dp binding: " << instName
+       << "\" << \"\\n\"; std::abort(); }\n";
+  }
   os << "  }\n\n";
 
   // Constructor (wire members default-initialize to 0).
@@ -889,23 +908,6 @@ static LogicalResult emitFunc(func::FuncOp f, llvm::raw_ostream &os) {
        << ", " << nt.get(mem.getRdata()) << ", " << nt.get(mem.getWvalid()) << ", " << nt.get(mem.getWaddr()) << ", "
        << nt.get(mem.getWdata()) << ", " << nt.get(mem.getWstrb()) << ")";
   }
-  for (auto mem : syncMems) {
-    os << (firstInit ? " :\n" : ",\n");
-    firstInit = false;
-    std::string instName = syncMemInstName.lookup(mem.getOperation());
-    os << "      " << instName << "(" << nt.get(mem.getClk()) << ", " << nt.get(mem.getRst()) << ", " << nt.get(mem.getRen())
-       << ", " << nt.get(mem.getRaddr()) << ", " << nt.get(mem.getRdata()) << ", " << nt.get(mem.getWvalid()) << ", "
-       << nt.get(mem.getWaddr()) << ", " << nt.get(mem.getWdata()) << ", " << nt.get(mem.getWstrb()) << ")";
-  }
-  for (auto mem : syncMemDPs) {
-    os << (firstInit ? " :\n" : ",\n");
-    firstInit = false;
-    std::string instName = syncMemDPInstName.lookup(mem.getOperation());
-    os << "      " << instName << "(" << nt.get(mem.getClk()) << ", " << nt.get(mem.getRst()) << ", " << nt.get(mem.getRen0())
-       << ", " << nt.get(mem.getRaddr0()) << ", " << nt.get(mem.getRdata0()) << ", " << nt.get(mem.getRen1()) << ", "
-       << nt.get(mem.getRaddr1()) << ", " << nt.get(mem.getRdata1()) << ", " << nt.get(mem.getWvalid()) << ", "
-       << nt.get(mem.getWaddr()) << ", " << nt.get(mem.getWdata()) << ", " << nt.get(mem.getWstrb()) << ")";
-  }
   for (auto fifo : asyncFifos) {
     os << (firstInit ? " :\n" : ",\n");
     firstInit = false;
@@ -928,6 +930,41 @@ static LogicalResult emitFunc(func::FuncOp f, llvm::raw_ostream &os) {
     os << "    " << nt.get(r.getQ()) << "_inst = new pyc::cpp::pyc_reg<" << w << ">("
        << nt.get(r.getClk()) << ", " << nt.get(r.getRst()) << ", " << nt.get(r.getEn()) << ", " << nt.get(r.getNext())
        << ", " << nt.get(r.getInit()) << ", " << nt.get(r.getQ()) << ");\n";
+  }
+  for (auto mem : syncMems) {
+    auto addrTy = dyn_cast<IntegerType>(mem.getRaddr().getType());
+    auto dataTy = dyn_cast<IntegerType>(mem.getRdata().getType());
+    if (!addrTy || !dataTy)
+      return mem.emitError("C++ emitter only supports integer sync_mem types");
+    unsigned addrW = addrTy.getWidth();
+    unsigned dataW = dataTy.getWidth();
+    auto depthAttr = mem->getAttrOfType<IntegerAttr>("depth");
+    if (!depthAttr)
+      return mem.emitError("missing integer attribute `depth`");
+    auto depth = depthAttr.getValue().getZExtValue();
+    std::string instName = syncMemInstName.lookup(mem.getOperation());
+    os << "    " << instName << " = new pyc::cpp::pyc_sync_mem<" << addrW << ", " << dataW << ", " << depth << ">("
+       << nt.get(mem.getClk()) << ", " << nt.get(mem.getRst()) << ", " << nt.get(mem.getRen()) << ", "
+       << nt.get(mem.getRaddr()) << ", " << nt.get(mem.getRdata()) << ", " << nt.get(mem.getWvalid()) << ", "
+       << nt.get(mem.getWaddr()) << ", " << nt.get(mem.getWdata()) << ", " << nt.get(mem.getWstrb()) << ");\n";
+  }
+  for (auto mem : syncMemDPs) {
+    auto addrTy = dyn_cast<IntegerType>(mem.getRaddr0().getType());
+    auto dataTy = dyn_cast<IntegerType>(mem.getRdata0().getType());
+    if (!addrTy || !dataTy)
+      return mem.emitError("C++ emitter only supports integer sync_mem_dp types");
+    unsigned addrW = addrTy.getWidth();
+    unsigned dataW = dataTy.getWidth();
+    auto depthAttr = mem->getAttrOfType<IntegerAttr>("depth");
+    if (!depthAttr)
+      return mem.emitError("missing integer attribute `depth`");
+    auto depth = depthAttr.getValue().getZExtValue();
+    std::string instName = syncMemDPInstName.lookup(mem.getOperation());
+    os << "    " << instName << " = new pyc::cpp::pyc_sync_mem_dp<" << addrW << ", " << dataW << ", " << depth << ">("
+       << nt.get(mem.getClk()) << ", " << nt.get(mem.getRst()) << ", " << nt.get(mem.getRen0()) << ", "
+       << nt.get(mem.getRaddr0()) << ", " << nt.get(mem.getRdata0()) << ", " << nt.get(mem.getRen1()) << ", "
+       << nt.get(mem.getRaddr1()) << ", " << nt.get(mem.getRdata1()) << ", " << nt.get(mem.getWvalid()) << ", "
+       << nt.get(mem.getWaddr()) << ", " << nt.get(mem.getWdata()) << ", " << nt.get(mem.getWstrb()) << ");\n";
   }
   os << "    _pyc_validate_primitive_bindings();\n";
   os << "    _pyc_init_runtime_controls();\n";
@@ -1919,9 +1956,9 @@ static LogicalResult emitFunc(func::FuncOp f, llvm::raw_ostream &os) {
   for (auto mem : byteMems)
     os << "    " << byteMemInstName.lookup(mem.getOperation()) << ".tick_compute();\n";
   for (auto mem : syncMems)
-    os << "    " << syncMemInstName.lookup(mem.getOperation()) << ".tick_compute();\n";
+    os << "    " << syncMemInstName.lookup(mem.getOperation()) << "->tick_compute();\n";
   for (auto mem : syncMemDPs)
-    os << "    " << syncMemDPInstName.lookup(mem.getOperation()) << ".tick_compute();\n";
+    os << "    " << syncMemDPInstName.lookup(mem.getOperation()) << "->tick_compute();\n";
   for (auto fifo : asyncFifos)
     os << "    " << nt.get(fifo.getInReady()) << "_inst.tick_compute();\n";
   for (auto s : cdcSyncs)
@@ -1943,9 +1980,9 @@ static LogicalResult emitFunc(func::FuncOp f, llvm::raw_ostream &os) {
   for (auto mem : byteMems)
     os << "    " << byteMemInstName.lookup(mem.getOperation()) << ".tick_commit();\n";
   for (auto mem : syncMems)
-    os << "    " << syncMemInstName.lookup(mem.getOperation()) << ".tick_commit();\n";
+    os << "    " << syncMemInstName.lookup(mem.getOperation()) << "->tick_commit();\n";
   for (auto mem : syncMemDPs)
-    os << "    " << syncMemDPInstName.lookup(mem.getOperation()) << ".tick_commit();\n";
+    os << "    " << syncMemDPInstName.lookup(mem.getOperation()) << "->tick_commit();\n";
   for (auto fifo : asyncFifos)
     os << "    " << nt.get(fifo.getInReady()) << "_inst.tick_commit();\n";
   for (auto s : cdcSyncs)

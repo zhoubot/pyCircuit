@@ -16,22 +16,22 @@ pyc_die() {
   exit 1
 }
 
-pyc_find_pyc_compile() {
-  if [[ -n "${PYC_COMPILE:-}" && -x "${PYC_COMPILE}" ]]; then
+pyc_find_pycc() {
+  if [[ -n "${PYCC:-}" && -x "${PYCC}" ]]; then
     return 0
   fi
 
   local candidates=(
     # Preferred: current MLIR build dir.
-    "${PYC_ROOT_DIR}/compiler/mlir/build2/bin/pyc-compile"
+    "${PYC_ROOT_DIR}/compiler/mlir/build2/bin/pycc"
     # Alternate build dirs still used in some local workflows.
-    "${PYC_ROOT_DIR}/build/bin/pyc-compile"
-    "${PYC_ROOT_DIR}/compiler/mlir/build/bin/pyc-compile"
-    "${PYC_ROOT_DIR}/build-top/bin/pyc-compile"
+    "${PYC_ROOT_DIR}/build/bin/pycc"
+    "${PYC_ROOT_DIR}/compiler/mlir/build/bin/pycc"
+    "${PYC_ROOT_DIR}/build-top/bin/pycc"
   )
 
   # Pick the newest executable among the common build locations. This avoids
-  # accidentally grabbing an older `pyc-compile` from a stale build directory.
+  # accidentally grabbing an older `pycc` from a stale build directory.
   local best=""
   local best_mtime=0
   for c in "${candidates[@]}"; do
@@ -51,17 +51,17 @@ pyc_find_pyc_compile() {
     fi
   done
   if [[ -n "${best}" ]]; then
-    export PYC_COMPILE="${best}"
+    export PYCC="${best}"
     return 0
   fi
 
-  if command -v pyc-compile >/dev/null 2>&1; then
-    export PYC_COMPILE
-    PYC_COMPILE="$(command -v pyc-compile)"
+  if command -v pycc >/dev/null 2>&1; then
+    export PYCC
+    PYCC="$(command -v pycc)"
     return 0
   fi
 
-  pyc_die "missing pyc-compile (set PYC_COMPILE=... or build it with: flows/scripts/pyc build)"
+  pyc_die "missing pycc (set PYCC=... or build it with: flows/scripts/pyc build)"
 }
 
 pyc_pythonpath() {

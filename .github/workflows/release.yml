@@ -77,7 +77,7 @@ jobs:
             -DCPACK_PACKAGE_VERSION="$VERSION" \
             -DCPACK_PACKAGE_FILE_NAME="$PKG"
 
-          ninja -C build pyc-compile pyc-opt
+          ninja -C build pycc pyc-opt
           (cd build && cpack -G TGZ)
 
           mkdir -p dist

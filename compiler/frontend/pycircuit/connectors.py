@@ -3,11 +3,51 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Iterable, Iterator, Mapping, MutableMapping
 
-from .meta.types import StructSpec
+from .spec.types import StructSpec
 
 
 class ConnectorError(TypeError):
     pass
+
+
+def _merge_owner(owner: Any | None, candidate: Any | None, *, ctx: str) -> Any | None:
+    if candidate is None:
+        return owner
+    if owner is None:
+        return candidate
+    if owner is not candidate:
+        raise ConnectorError(f"{ctx}: fields must belong to the same Circuit")
+    return owner
+
+
+def _owner_from_leaf(v: Any) -> Any | None:
+    if isinstance(v, Connector):
+        return v.owner
+    q = getattr(v, "q", None)
+    q_owner = getattr(q, "m", None)
+    if q_owner is not None:
+        return q_owner
+    m_owner = getattr(v, "m", None)
+    if m_owner is not None:
+        return m_owner
+    return None
+
+
+def _scan_owner_tree(v: Any, *, ctx: str) -> Any | None:
+    owner: Any | None = None
+    if isinstance(v, ConnectorBundle):
+        for c in v.values():
+            owner = _merge_owner(owner, c.owner, ctx=ctx)
+        return owner
+    if isinstance(v, ConnectorStruct):
+        for c in v.values():
+            owner = _merge_owner(owner, c.owner, ctx=ctx)
+        return owner
+    if isinstance(v, Mapping):
+        for vv in v.values():
+            owner = _merge_owner(owner, _scan_owner_tree(vv, ctx=ctx), ctx=ctx)
+        return owner
+    return _owner_from_leaf(v)
 
 
 class Connector:
@@ -176,15 +216,26 @@ class RegConnector(Connector):
 
 
 class ConnectorBundle:
-    def __init__(self, fields: Mapping[str, Connector]) -> None:
+    def __init__(self, fields: Mapping[str, Any]) -> None:
         out: MutableMapping[str, Connector] = {}
+        owner_hint = _scan_owner_tree(fields, ctx="ConnectorBundle")
         for k, v in fields.items():
             key = str(k)
             if not key:
                 raise ConnectorError("bundle field name must be non-empty")
-            if not isinstance(v, Connector):
-                raise ConnectorError(f"bundle field {key!r}: expected Connector, got {type(v).__name__}")
-            out[key] = v
+            if isinstance(v, Connector):
+                out[key] = v
+                owner_hint = _merge_owner(owner_hint, v.owner, ctx=f"ConnectorBundle[{key!r}]")
+                continue
+            if owner_hint is None:
+                raise ConnectorError(
+                    f"bundle field {key!r}: cannot infer owning Circuit for implicit coercion"
+                )
+            c = owner_hint.as_connector(v, name=key)
+            if not isinstance(c, Connector):
+                raise ConnectorError(f"bundle field {key!r}: implicit coercion did not produce a Connector")
+            out[key] = c
+            owner_hint = _merge_owner(owner_hint, c.owner, ctx=f"ConnectorBundle[{key!r}]")
         self.fields: dict[str, Connector] = dict(out)
 
     def __getitem__(self, key: str) -> Connector:
@@ -212,7 +263,8 @@ class ConnectorStruct:
     def __init__(self, fields: Mapping[str, Any], *, spec: StructSpec | None = None) -> None:
         self.spec = spec
         flat: dict[str, Connector] = {}
-        self._flatten_input(fields, out=flat)
+        owner_hint = _scan_owner_tree(fields, ctx="ConnectorStruct")
+        self._flatten_input(fields, out=flat, owner_hint=owner_hint)
         if not flat:
             raise ConnectorError("ConnectorStruct requires at least one field")
 
@@ -236,7 +288,13 @@ class ConnectorStruct:
         self.fields: dict[str, Connector] = dict(sorted(flat.items(), key=lambda kv: kv[0]))
 
     @staticmethod
-    def _flatten_input(v: Mapping[str, Any], *, out: dict[str, Connector], prefix: str = "") -> None:
+    def _flatten_input(
+        v: Mapping[str, Any],
+        *,
+        out: dict[str, Connector],
+        owner_hint: Any | None,
+        prefix: str = "",
+    ) -> None:
         for raw_k, raw_v in v.items():
             k = str(raw_k)
             if not k:
@@ -255,9 +313,18 @@ class ConnectorStruct:
                     out[f"{path}.{kk}"] = vv
                 continue
             if isinstance(raw_v, Mapping):
-                ConnectorStruct._flatten_input(raw_v, out=out, prefix=path)
+                ConnectorStruct._flatten_input(raw_v, out=out, owner_hint=owner_hint, prefix=path)
                 continue
-            raise ConnectorError(f"ConnectorStruct field {path!r}: expected Connector/mapping, got {type(raw_v).__name__}")
+            if owner_hint is None:
+                raise ConnectorError(
+                    f"ConnectorStruct field {path!r}: cannot infer owning Circuit for implicit coercion"
+                )
+            c = owner_hint.as_connector(raw_v, name=path)
+            if not isinstance(c, Connector):
+                raise ConnectorError(
+                    f"ConnectorStruct field {path!r}: implicit coercion did not produce a Connector"
+                )
+            out[path] = c
 
     @classmethod
     def from_flat(

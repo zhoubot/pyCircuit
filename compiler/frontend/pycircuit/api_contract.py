@@ -8,7 +8,11 @@ from typing import Iterable
 
 from .diagnostics import Diagnostic, make_diagnostic, snippet_from_file, snippet_from_text
 
-FRONTEND_API_VERSION = "v3.4"
+# Frontend/backend contract marker stamped into emitted `.pyc` MLIR modules.
+#
+# This is intentionally versionless: we enforce a single in-repo contract and do
+# not support multi-epoch frontend/backend compatibility.
+FRONTEND_CONTRACT = "pycircuit"
 
 
 _REMOVED_CALL_HINTS: dict[str, str] = {
@@ -45,6 +49,7 @@ _REMOVED_CALL_HINTS: dict[str, str] = {
     "connect_like": "use `connect(...)`",
     "connect_struct": "use `connect(...)`",
     "jit_inline": "use `function` for inline hardware helpers",
+    "as_connector": "remove explicit connector wrapping and pass values directly",
 }
 
 
@@ -68,31 +73,31 @@ TEXT_RULES: tuple[TextRule, ...] = (
     TextRule(
         code="PYC401",
         pattern=_rx(r"\bfrom\s+pycircuit\s+import[^\n]*\bcompile_design\b"),
-        message="removed API `compile_design` is not allowed in v3.4",
+        message="removed API `compile_design` is not allowed in pyCircuit",
         hint="import and call `compile(...)`",
     ),
     TextRule(
         code="PYC402",
         pattern=_rx(r"\bpycircuit\.compile_design\b"),
-        message="removed API `pycircuit.compile_design` is not allowed in v3.4",
+        message="removed API `pycircuit.compile_design` is not allowed in pyCircuit",
         hint="use `pycircuit.compile(...)`",
     ),
     TextRule(
         code="PYC403",
         pattern=_rx(r"\bfrom\s+pycircuit\s+import[^\n]*\btemplate\b"),
-        message="removed API `template` is not allowed in v3.4",
+        message="removed API `template` is not allowed in pyCircuit",
         hint="use `const`",
     ),
     TextRule(
         code="PYC404",
         pattern=_rx(r"@\s*template\b"),
-        message="removed decorator `@template` is not allowed in v3.4",
+        message="removed decorator `@template` is not allowed in pyCircuit",
         hint="use `@const`",
     ),
     TextRule(
         code="PYC405",
         pattern=_rx(r"\bjit_inline\b"),
-        message="removed API `jit_inline` is not allowed in v3.4",
+        message="removed API `jit_inline` is not allowed in pyCircuit",
         hint="use `@function`",
     ),
     TextRule(
@@ -166,6 +171,12 @@ TEXT_RULES: tuple[TextRule, ...] = (
         pattern=_rx(r"\b(?:meta\.)?connect_(?:like|struct)\s*\("),
         message="removed meta.connect compatibility APIs",
         hint="use `connect(...)`",
+    ),
+    TextRule(
+        code="PYC423",
+        pattern=_rx(r"\.as_connector\s*\("),
+        message="removed explicit connector wrapper `.as_connector(...)`",
+        hint="pass Wire/Reg/Signal/int/literal values directly; coercion is implicit at call boundaries",
     ),
 )
 

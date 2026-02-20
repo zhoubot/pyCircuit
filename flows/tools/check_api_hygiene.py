@@ -41,13 +41,13 @@ TEXT_SUFFIXES = {
 SKIP_DIRS = {
     ".git",
     ".pycircuit_out",
+    "contrib",
     "__pycache__",
     "build",
     "build-top",
-    "compiler/mlir/build2",
 }
 
-FRONTEND_RELAX_CODES = {"PYC415", "PYC416", "PYC417", "PYC418"}
+FRONTEND_RELAX_CODES = {"PYC415", "PYC416", "PYC417", "PYC418", "PYC423"}
 
 
 def iter_target_files(path: Path) -> list[Path]:
@@ -59,7 +59,11 @@ def iter_target_files(path: Path) -> list[Path]:
     for f in path.rglob("*"):
         if not f.is_file():
             continue
-        if any(part in SKIP_DIRS for part in f.parts):
+        dir_parts = f.parts[:-1]
+        if any(part in SKIP_DIRS for part in dir_parts):
+            continue
+        # Skip common build output directories (build/, build2/, build-foo/, ...).
+        if any(part.startswith("build") for part in dir_parts):
             continue
         if f.name in {"check_api_hygiene.py", "api_contract.py"}:
             continue

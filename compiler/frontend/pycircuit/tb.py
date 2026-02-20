@@ -146,6 +146,7 @@ class Expect:
     port: str
     value: int | bool
     at: int
+    phase: str = "post"
     msg: str | None = None
 
 
@@ -166,6 +167,15 @@ class RandomStream:
     every: int = 1
 
 
+@dataclass(frozen=True)
+class PrintAction:
+    fmt: str
+    ports: tuple[str, ...] = ()
+    at: int | None = None
+    start: int | None = None
+    every: int | None = None
+
+
 @dataclass
 class Tb:
     """A tiny, cycle-based testbench description (prototype).
@@ -180,6 +190,7 @@ class Tb:
     expects: list[Expect] = field(default_factory=list)
     sva_asserts: list[SvaAssert] = field(default_factory=list)
     random_streams: list[RandomStream] = field(default_factory=list)
+    prints: list[PrintAction] = field(default_factory=list)
 
     timeout_cycles: int = 1000
     finish_cycle: int | None = None
@@ -214,7 +225,15 @@ class Tb:
             raise TbError("drive value must be bool or int")
         self.drives.append(Drive(port=p, value=value, at=cyc))
 
-    def expect(self, port: str, value: int | bool, *, at: int, msg: str | None = None) -> None:
+    def expect(
+        self,
+        port: str,
+        value: int | bool,
+        *,
+        at: int,
+        phase: str = "post",
+        msg: str | None = None,
+    ) -> None:
         p = str(port).strip()
         if not p:
             raise TbError("expect port must be non-empty")
@@ -223,7 +242,10 @@ class Tb:
             raise TbError("expect cycle must be >= 0")
         if not isinstance(value, (bool, int)):
             raise TbError("expect value must be bool or int")
-        self.expects.append(Expect(port=p, value=value, at=cyc, msg=(None if msg is None else str(msg))))
+        ph = str(phase).strip().lower()
+        if ph not in {"pre", "post"}:
+            raise TbError("expect phase must be 'pre' or 'post'")
+        self.expects.append(Expect(port=p, value=value, at=cyc, phase=ph, msg=(None if msg is None else str(msg))))
 
     def timeout(self, cycles: int) -> None:
         t = int(cycles)
@@ -277,3 +299,30 @@ class Tb:
         if ev <= 0:
             raise TbError("random every must be > 0")
         self.random_streams.append(RandomStream(port=p, seed=int(seed), start=st, every=ev))
+
+    def print(self, fmt: str, *, at: int, ports: Iterable[str] = ()) -> None:
+        s = str(fmt)
+        if not s.strip():
+            raise TbError("print fmt must be non-empty")
+        cyc = int(at)
+        if cyc < 0:
+            raise TbError("print cycle must be >= 0")
+        ps = tuple(str(p).strip() for p in ports)
+        if any(not p for p in ps):
+            raise TbError("print ports must be non-empty names")
+        self.prints.append(PrintAction(fmt=s, ports=ps, at=cyc))
+
+    def print_every(self, fmt: str, *, start: int = 0, every: int = 1, ports: Iterable[str] = ()) -> None:
+        s = str(fmt)
+        if not s.strip():
+            raise TbError("print_every fmt must be non-empty")
+        st = int(start)
+        if st < 0:
+            raise TbError("print_every start must be >= 0")
+        ev = int(every)
+        if ev <= 0:
+            raise TbError("print_every every must be > 0")
+        ps = tuple(str(p).strip() for p in ports)
+        if any(not p for p in ps):
+            raise TbError("print_every ports must be non-empty names")
+        self.prints.append(PrintAction(fmt=s, ports=ps, start=st, every=ev))

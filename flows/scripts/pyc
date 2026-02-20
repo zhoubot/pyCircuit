@@ -12,13 +12,12 @@ usage() {
 Usage: flows/scripts/pyc <command>
 
 Commands:
-  build        Configure+build pyc-compile/pyc-opt into ./build
-  regen        Regenerate local outputs under ./.pycircuit_out
-  test         Run examples compile regression + C++ regressions (fastfwd + linx_cpu + linxcore)
+  build        Configure+build pycc/pyc-opt into ./build
+  smoke        Run compiler smoke (emit+pycc) and a small simulation smoke set
 
 Env:
   LLVM_DIR, MLIR_DIR   Optional. If unset, flows/scripts/pyc tries to infer via llvm-config.
-  PYC_COMPILE          Path to pyc-compile (overrides auto-detect).
+  PYCC          Path to pycc (overrides auto-detect).
 EOF
 }
 
@@ -60,35 +59,21 @@ case "${cmd}" in
     cmake -G Ninja -S "${ROOT_DIR}" -B "${ROOT_DIR}/build" \
       -DCMAKE_BUILD_TYPE=Release \
       -DLLVM_DIR="${LLVM_DIR}" \
-      -DMLIR_DIR="${MLIR_DIR}" \
-      -DPYC_BUILD_CPP_EXAMPLES=OFF
+      -DMLIR_DIR="${MLIR_DIR}"
 
-    pyc_log "build pyc-compile (pyc-opt is optional, run ninja pyc-opt to try)"
-    ninja -C "${ROOT_DIR}/build" pyc-compile
+    pyc_log "build pycc (pyc-opt is optional, run ninja pyc-opt to try)"
+    ninja -C "${ROOT_DIR}/build" pycc
     ninja -C "${ROOT_DIR}/build" pyc-opt 2>/dev/null || true
-    pyc_log "ok: ${ROOT_DIR}/build/bin/pyc-compile"
+    pyc_log "ok: ${ROOT_DIR}/build/bin/pycc"
     ;;
 
-  regen)
-    pyc_find_pyc_compile
-    pyc_log "regen .pycircuit_out/examples/*"
-    PYC_COMPILE="${PYC_COMPILE}" bash "${ROOT_DIR}/designs/examples/update_generated.sh"
-    pyc_log "regen .pycircuit_out/linxcore/*"
-    PYC_COMPILE="${PYC_COMPILE}" bash "${ROOT_DIR}/designs/linxcore/tools/generate/update_generated_linxcore.sh"
-    pyc_log "ok"
-    ;;
-
-  test)
-    pyc_find_pyc_compile
-    pyc_log "examples regression (compile all designs/examples build() entrypoints)"
-    PYC_COMPILE="${PYC_COMPILE}" bash "${ROOT_DIR}/designs/examples/update_generated.sh"
-    pyc_log "fastfwd regression (C++)"
-    PYC_COMPILE="${PYC_COMPILE}" bash "${ROOT_DIR}/flows/tools/run_fastfwd_pyc_cpp.sh" --cycles 2000 --packets 4000
-    pyc_log "linx cpu regression (C++)"
-    PYC_COMPILE="${PYC_COMPILE}" bash "${ROOT_DIR}/flows/tools/run_linx_cpu_pyc_cpp.sh"
-    pyc_log "linxcore smoke regression"
-    PYC_COMPILE="${PYC_COMPILE}" bash "${ROOT_DIR}/designs/linxcore/tests/test_trace_schema_and_mem.sh"
-    pyc_log "ok"
+  smoke)
+    pyc_find_pycc
+    pyc_log "run example compile smoke"
+    PYCC="${PYCC}" bash "${ROOT_DIR}/flows/scripts/run_examples.sh"
+    pyc_log "run simulation smoke"
+    PYCC="${PYCC}" bash "${ROOT_DIR}/flows/scripts/run_sims.sh"
+    pyc_log "ok: smoke passed"
     ;;
 
   *)

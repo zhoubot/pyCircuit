@@ -4,16 +4,11 @@ project(pycircuit VERSION 0.0.0 LANGUAGES C CXX)
 include(GNUInstallDirs)
 
 option(PYC_BUILD_MLIR_TOOLS "Build MLIR-based pyc tools" ON)
-option(PYC_BUILD_CPP_EXAMPLES "Build C++ simulation examples" ON)
 option(PYC_INSTALL_TEMPLATES "Install runtime template libraries" ON)
 option(PYC_INSTALL_PYTHON "Install Python frontend sources (for binary packages)" ON)
 
 if(PYC_BUILD_MLIR_TOOLS)
   add_subdirectory(compiler/mlir)
-endif()
-
-if(PYC_BUILD_CPP_EXAMPLES)
-  add_subdirectory(designs/examples/cpp)
 endif()
 
 if(PYC_INSTALL_TEMPLATES)

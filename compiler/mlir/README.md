@@ -3,7 +3,7 @@
 This folder contains the MLIR-based implementation of the `pyc` dialect, along with:
 
 - `pyc-opt`: `mlir-opt`-style tool with `pyc` dialect + passes
-- `pyc-compile`: compile `.pyc` (MLIR) to Verilog or C++ via template libraries
+- `pycc`: compile `.pyc` (MLIR) to Verilog or C++ via template libraries
 
 ## Build
 
@@ -18,7 +18,7 @@ cmake -G Ninja -S compiler/mlir -B compiler/mlir/build \
   -DMLIR_DIR=$HOME/llvm-project/build-mlir/lib/cmake/mlir \
   -DLLVM_DIR=$HOME/llvm-project/build-mlir/lib/cmake/llvm
 
-ninja -C compiler/mlir/build pyc-opt pyc-compile
+ninja -C compiler/mlir/build pyc-opt pycc
 ```
 
 ## Passes (prototype)
@@ -29,7 +29,7 @@ Eliminates trivial `pyc.wire` + `pyc.assign` pairs when safe (single driver that
 dominates all reads), and removes dead wires. This reduces netlist noise and
 helps subsequent CSE/constprop.
 
-`pyc-compile` runs this pass by default before emission.
+`pycc` runs this pass by default before emission.
 
 ### `pyc-comb-canonicalize`
 
@@ -38,7 +38,7 @@ Combinational simplifications, currently focused on mux canonicalization:
 - collapses nested muxes with the same select
 - rewrites some `i1` mux patterns into simpler boolean logic
 
-`pyc-compile` runs this pass by default before emission.
+`pycc` runs this pass by default before emission.
 
 ### `pyc-fuse-comb`
 
@@ -48,7 +48,7 @@ Fuses consecutive pure combinational ops (`pyc.add/mux/and/or/xor/not/constant`)
 - flattened Verilog emission (`assign` instead of many tiny module instantiations)
 - inlined C++ combinational evaluation (fewer tiny objects / calls)
 
-`pyc-compile` runs this pass by default before emission.
+`pycc` runs this pass by default before emission.
 
 ### `pyc-check-flat-types`
 
@@ -57,11 +57,11 @@ Verifies that the IR is fully lowered to flat hardware-carrying types
 similar in spirit to FIRRTL's type-lowering: pyCircuit's Python frontend packs
 bundles/vectors into integers, so aggregate types should never reach the PYC IR.
 
-`pyc-compile` runs this check by default.
+`pycc` runs this check by default.
 
 ### `pyc-prune-ports`
 
 Module-level cleanup pass that prunes unused `func.func` arguments and updates
 `func.call` sites. This changes the externally visible interface, so it is
-**not** run by default in `pyc-compile`, but can be useful for internal
+**not** run by default in `pycc`, but can be useful for internal
 refactors or design-space exploration flows.

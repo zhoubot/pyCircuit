@@ -18,7 +18,7 @@ PYTHONPATH=compiler/frontend python3 -m pycircuit.cli emit \
   designs/examples/digital_clock/digital_clock.py \
   -o .pycircuit_out/examples/digital_clock/digital_clock.pyc
 
-build/bin/pyc-compile \
+build/bin/pycc \
   .pycircuit_out/examples/digital_clock/digital_clock.pyc \
   --emit=cpp \
   -o .pycircuit_out/examples/digital_clock/digital_clock_gen.hpp

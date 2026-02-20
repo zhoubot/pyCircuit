@@ -1,79 +1,58 @@
-# pyCircuit v3.4
+# pyCircuit
 
-pyCircuit v3.4 is a strict fresh-start frontend:
-- hard API contract enforcement before hardware lowering
-- compile-time metaprogramming with `@const`
-- split C++/Verilog emission for large designs
+pyCircuit is a strict Python frontend for generating hardware from a small MLIR
+dialect ("PYC") and emitting:
+- Verilog netlists
+- a cycle-accurate C++ model
 
-## Core model
+## Model
 
 - `@module`: hierarchy boundary
 - `@function`: inline hardware helper
 - `@const`: compile-time pure helper (no IR emission, no module mutation)
-- inter-module boundaries use connectors only
+- `@testbench`: host-side cycle test program carried as a `.pyc` payload
 
-## Canonical API
+Compile-time + wiring helpers:
+- `pycircuit.spec` (compile-time shapes/params)
+- `pycircuit.wiring` (binding/unflatten helpers)
+- `pycircuit.logic` (combinational helpers)
+- `pycircuit.lib` (standard blocks/signatures)
 
-Top-level:
-- `module`, `function`, `const`, `compile`, `ct`, `meta`
+## Quickstart
 
-Circuit grammar:
-- `inputs(...)`, `outputs(...)`, `state(...)`, `pipe(...)`
-- `new(...)` for a single instance
-- `array(...)` for deterministic instance collections
-- `connect(...)` for strict connector wiring
-
-Meta connect helpers:
-- `meta.bind(...)`, `meta.ports(...)`
-- `meta.inputs(...)`, `meta.outputs(...)`, `meta.state(...)`
-- `meta.connect(...)`
-
-## Build and run
+Build the backend tool (`pycc`):
 
 ```bash
 bash /Users/zhoubot/pyCircuit/flows/scripts/pyc build
 ```
 
-Emit MLIR:
+Run compiler smoke:
 
 ```bash
-PYTHONPATH=/Users/zhoubot/pyCircuit/compiler/frontend python3 -m pycircuit.cli emit \
-  /Users/zhoubot/pyCircuit/designs/examples/template_module_collection_demo.py \
-  -o /tmp/template_module_collection_demo.pyc
+bash /Users/zhoubot/pyCircuit/flows/scripts/run_examples.sh
 ```
 
-Compile split C++:
+Run simulation smoke (Verilator + `@testbench`):
 
 ```bash
-/Users/zhoubot/pyCircuit/compiler/mlir/build2/bin/pyc-compile /tmp/template_module_collection_demo.pyc \
-  --emit=cpp --out-dir /tmp/template_module_collection_demo_cpp --cpp-split=module
-```
-
-## Strict contract gate
-
-```bash
-python3 /Users/zhoubot/pyCircuit/flows/tools/check_api_hygiene.py
-```
-
-Scan downstream project roots:
-
-```bash
-python3 /Users/zhoubot/pyCircuit/flows/tools/check_api_hygiene.py \
-  --scan-root /Users/zhoubot/LinxCore src
+bash /Users/zhoubot/pyCircuit/flows/scripts/run_sims.sh
 ```
 
 ## Main docs
 
-- `/Users/zhoubot/pyCircuit/docs/USAGE.md`
-- `/Users/zhoubot/pyCircuit/docs/COMPILER_FLOW.md`
-- `/Users/zhoubot/pyCircuit/docs/TEMPLATE_METAPROGRAMMING.md`
-- `/Users/zhoubot/pyCircuit/docs/META_STRUCTURES.md`
-- `/Users/zhoubot/pyCircuit/docs/META_COLLECTIONS.md`
+- `/Users/zhoubot/pyCircuit/docs/QUICKSTART.md`
+- `/Users/zhoubot/pyCircuit/docs/FRONTEND_API.md`
+- `/Users/zhoubot/pyCircuit/docs/PIPELINE.md`
+- `/Users/zhoubot/pyCircuit/docs/TESTBENCH.md`
+- `/Users/zhoubot/pyCircuit/docs/CONST_METAPROGRAMMING.md`
+- `/Users/zhoubot/pyCircuit/docs/SPEC_STRUCTURES.md`
+- `/Users/zhoubot/pyCircuit/docs/SPEC_COLLECTIONS.md`
+- `/Users/zhoubot/pyCircuit/docs/IR_SPEC.md`
+- `/Users/zhoubot/pyCircuit/docs/PRIMITIVES.md`
 - `/Users/zhoubot/pyCircuit/docs/DIAGNOSTICS.md`
 
 ## Regressions
 
 - `bash /Users/zhoubot/pyCircuit/flows/scripts/run_examples.sh`
-- `bash /Users/zhoubot/pyCircuit/flows/tools/run_linx_cpu_pyc_cpp.sh`
-- `bash /Users/zhoubot/pyCircuit/flows/tools/run_fastfwd_pyc_cpp.sh`
-- `python3 /Users/zhoubot/pyCircuit/flows/tools/perf/run_perf_smoke.py`
+- `bash /Users/zhoubot/pyCircuit/flows/scripts/run_sims.sh`
+

@@ -1,13 +1,13 @@
 from __future__ import annotations
 
-from pycircuit import Circuit, ConnectorStruct, compile, meta, module, const, u
+from pycircuit import Circuit, ConnectorStruct, compile, const, module, spec, u
 
 
 @const
 def _pipe_struct(m: Circuit, *, width: int):
     _ = m
     base = (
-        meta.struct("pipe")
+        spec.struct("pipe")
         .field("payload.data", width=width)
         .field("ctrl.valid", width=1)
         .field("ctrl.ready", width=1)
@@ -22,19 +22,17 @@ def _pipe_struct(m: Circuit, *, width: int):
 def build(m: Circuit, *, width: int = 32):
     clk = m.clock("clk")
     rst = m.reset("rst")
-    clk_c = m.as_connector(clk, name="clk")
-    rst_c = m.as_connector(rst, name="rst")
 
     s = _pipe_struct(m, width=width)
     in_b = m.inputs(s, prefix="in_")
 
-    st0 = m.state(s, clk=clk_c, rst=rst_c, prefix="st0_")
+    st0 = m.state(s, clk=clk, rst=rst, prefix="st0_")
     m.connect(st0, in_b)
 
     st1_in = st0.flatten()
-    st1_in["payload.word"] = m.as_connector((st0["payload.word"].read() + u(width, 1))[0:width], name="payload_word")
+    st1_in["payload.word"] = (st0["payload.word"].read() + u(width, 1))[0:width]
 
-    st1 = m.state(s, clk=clk_c, rst=rst_c, prefix="st1_")
+    st1 = m.state(s, clk=clk, rst=rst, prefix="st1_")
     m.connect(st1, ConnectorStruct(st1_in, spec=s))
 
     m.outputs(s, st1, prefix="out_")

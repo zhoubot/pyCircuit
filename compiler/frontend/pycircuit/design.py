@@ -3,10 +3,11 @@ from __future__ import annotations
 import hashlib
 import inspect
 import json
+import re
 from dataclasses import dataclass
 from typing import Any, Callable, Iterable, Mapping, TYPE_CHECKING
 
-from .api_contract import FRONTEND_API_VERSION
+from .api_contract import FRONTEND_CONTRACT
 from .dsl import Module
 
 if TYPE_CHECKING:
@@ -69,6 +70,25 @@ def const(_fn: Any | None = None, *, name: str | None = None) -> Callable[[Any],
         setattr(fn, "__pycircuit_kind__", "const")
         setattr(fn, "__pycircuit_inline__", True)
         setattr(fn, "__pycircuit_emit_structural__", False)
+        return fn
+
+    if _fn is None:
+        return deco
+    return deco(_fn)
+
+
+def testbench(_fn: Any | None = None, *, name: str | None = None) -> Callable[[Any], Any] | Any:
+    """Mark a Python function as a host-side testbench entrypoint.
+
+    Testbench functions are not lowered as hardware modules; they are consumed by
+    `pycircuit.cli build` to emit TB `.pyc` payloads for backend lowering.
+    """
+
+    def deco(fn: Any) -> Any:
+        if isinstance(name, str) and name.strip():
+            setattr(fn, "__pycircuit_module_name__", str(name).strip())
+        setattr(fn, "__pycircuit_testbench__", True)
+        setattr(fn, "__pycircuit_kind__", "testbench")
         return fn
 
     if _fn is None:
@@ -177,12 +197,89 @@ class Design:
         #
         # `pyc.top` is a FlatSymbolRefAttr for tools to find the top module.
         parts: list[str] = []
-        parts.append(f'module attributes {{pyc.top = @{self.top}, pyc.frontend.api = "{FRONTEND_API_VERSION}"}} {{\n')
+        parts.append(
+            f'module attributes {{pyc.top = @{self.top}, pyc.frontend.contract = "{FRONTEND_CONTRACT}"}} {{\n'
+        )
         for cm in self._mods.values():
             parts.append(cm.mod.emit_func_mlir())
             parts.append("\n")
         parts.append("}\n")
         return "".join(parts)
+
+    def emit_module_mlir_map(self) -> dict[str, str]:
+        """Emit deterministic single-module `.pyc` MLIR text per compiled symbol."""
+        out: dict[str, str] = {}
+        for sym in sorted(self._mods.keys()):
+            cm = self._mods[sym]
+            body = cm.mod.emit_func_mlir()
+            deps = [d for d in self._deps_for_module_mlir(body) if d != sym and d in self._mods]
+            dep_decls: list[str] = []
+            for dep_sym in deps:
+                dep_decls.append(self._emit_dep_decl_mlir(self._mods[dep_sym]))
+            out[sym] = (
+                f'module attributes {{pyc.top = @{sym}, pyc.frontend.contract = "{FRONTEND_CONTRACT}"}} {{\n'
+                + "".join(dep_decls)
+                + body
+                + "\n}\n"
+            )
+        return out
+
+    @staticmethod
+    def _deps_for_module_mlir(mlir_text: str) -> list[str]:
+        deps = sorted(set(re.findall(r"@([A-Za-z_][A-Za-z0-9_\\$]*)", mlir_text)))
+        # Remove self references created from function headers by caller filtering.
+        return deps
+
+    @staticmethod
+    def _emit_dep_decl_mlir(cm: CompiledModule) -> str:
+        args_sig = ", ".join(cm.arg_types)
+        sig = f"({args_sig})"
+        if cm.result_types:
+            sig += f" -> ({', '.join(cm.result_types)})"
+        kind = _kind_of(cm.fn)
+        inline = "true" if _inline_of(cm.fn) else "false"
+        base = _base_name(cm.fn)
+        params_esc = json.dumps(cm.params_json, ensure_ascii=False)
+        base_esc = json.dumps(base, ensure_ascii=False)
+        arg_names_esc = json.dumps(list(cm.arg_names), ensure_ascii=False)
+        result_names_esc = json.dumps(list(cm.result_names), ensure_ascii=False)
+        attrs = (
+            f'attributes {{arg_names = {arg_names_esc}, result_names = {result_names_esc}, '
+            f'pyc.kind = "{kind}", pyc.inline = "{inline}", pyc.params = {params_esc}, '
+            f"pyc.base = {base_esc}"
+        )
+        if _emit_structural_of(cm.fn):
+            attrs += ', pyc.emit.structural = "true"'
+        attrs += "}"
+        return f"  func.func private @{cm.sym_name}{sig} {attrs}\n"
+
+    def emit_project_manifest(self, *, module_dir_rel: str = "device/modules") -> dict[str, Any]:
+        """Create deterministic project manifest for multi-`.pyc` flow."""
+        modules_out: list[dict[str, Any]] = []
+        for sym in sorted(self._mods.keys()):
+            cm = self._mods[sym]
+            func_mlir = cm.mod.emit_func_mlir()
+            deps = [d for d in self._deps_for_module_mlir(func_mlir) if d != sym and d in self._mods]
+            params_hash = hashlib.sha256(cm.params_json.encode("utf-8")).hexdigest()[:16]
+            modules_out.append(
+                {
+                    "name": sym,
+                    "pyc": f"{module_dir_rel}/{sym}.pyc",
+                    "params_hash": params_hash,
+                    "deps": deps,
+                    "arg_names": list(cm.arg_names),
+                    "arg_types": list(cm.arg_types),
+                    "result_names": list(cm.result_names),
+                    "result_types": list(cm.result_types),
+                }
+            )
+
+        return {
+            "version": 1,
+            "frontend_contract": FRONTEND_CONTRACT,
+            "top": self.top,
+            "modules": modules_out,
+        }
 
 
 class DesignContext:
@@ -299,7 +396,6 @@ class DesignContext:
             mod.set_func_attr("pyc.params", params_json)
             mod.set_func_attr("pyc.kind", _kind_of(fn))
             mod.set_func_attr("pyc.inline", "true" if _inline_of(fn) else "false")
-            mod.set_func_attr("pyc.frontend.api", FRONTEND_API_VERSION)
             if _emit_structural_of(fn):
                 mod.set_func_attr("pyc.emit.structural", "true")
         except Exception as e:

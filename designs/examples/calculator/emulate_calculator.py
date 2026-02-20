@@ -9,7 +9,7 @@ Build (from pyCircuit root):
     PYTHONPATH=compiler/frontend:. python -m pycircuit.cli emit \
         designs/examples/calculator/calculator.py \
         -o .pycircuit_out/examples/calculator/calculator.pyc
-    build/bin/pyc-compile .pycircuit_out/examples/calculator/calculator.pyc \
+    build/bin/pycc .pycircuit_out/examples/calculator/calculator.pyc \
         --emit=cpp -o .pycircuit_out/examples/calculator/calculator_gen.hpp
     c++ -std=c++17 -O2 -shared -fPIC -I runtime -I . \
         -o designs/examples/calculator/libcalculator_sim.dylib \

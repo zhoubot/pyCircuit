@@ -12,7 +12,7 @@ def build(m: Circuit, depth: int = 2) -> None:
     in_data = m.input("in_data", width=8)
     out_ready = m.input("out_ready", width=1)
 
-    q = m.queue("q", clk=clk, rst=rst, width=8, depth=depth)
+    q = m.rv_queue("q", clk=clk, rst=rst, width=8, depth=depth)
     q.push(in_data, when=in_valid)
     p = q.pop(when=out_ready)
 

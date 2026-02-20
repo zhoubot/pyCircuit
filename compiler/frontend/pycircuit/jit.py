@@ -389,7 +389,7 @@ class _Compiler:
 
     @staticmethod
     def _is_hw_value(v: Any) -> bool:
-        if isinstance(v, (Wire, Reg, Signal, Vec, Bundle, Connector)):
+        if isinstance(v, (Wire, Reg, Signal, Vec, Bundle, Connector, LiteralValue)):
             return True
         if is_connector_bundle(v):
             return True
@@ -414,7 +414,13 @@ class _Compiler:
         mod = getattr(fn, "__module__", None)
         if not isinstance(mod, str):
             return False
-        return mod.startswith("pycircuit.hw") or mod.startswith("pycircuit.meta")
+        return (
+            mod.startswith("pycircuit.hw")
+            or mod.startswith("pycircuit.spec")
+            or mod.startswith("pycircuit.wiring")
+            or mod.startswith("pycircuit.logic")
+            or mod.startswith("pycircuit.lib")
+        )
 
     @staticmethod
     def _return_annotation_blocks_instance(ret_ann: Any) -> bool:
@@ -473,15 +479,14 @@ class _Compiler:
             if is_connector_bundle(v):
                 raise JitError(
                     "@module call does not accept ConnectorBundle as a single port value; "
-                    "bind each callee port with a Connector"
-                )
-            if self._is_hw_value(v):
-                raise JitError(
-                    f"@module call {getattr(fn, '__name__', fn)!r} uses raw hardware values; "
-                    "inter-module links must use Connector values"
+                    "bind each callee port explicitly"
                 )
             if isinstance(v, (list, tuple, dict, set)):
                 return None
+            if self._is_hw_value(v):
+                # Implicit port coercion: Wire/Reg/Signal values are accepted
+                # and wrapped as connectors in Circuit.instance_handle.
+                continue
             if not self._is_specialization_literal(v):
                 return None
 
@@ -513,10 +518,7 @@ class _Compiler:
                     "bind each formal port explicitly"
                 )
             elif self._is_hw_value(v):
-                raise JitError(
-                    f"@module call arg {pname!r} uses {type(v).__name__}; "
-                    "inter-module values must be Connector objects"
-                )
+                ports[pname] = v
             else:
                 spec_params[pname] = v
 
@@ -530,10 +532,7 @@ class _Compiler:
                     "bind each formal port explicitly"
                 )
             elif self._is_hw_value(v):
-                raise JitError(
-                    f"@module call kwarg {k!r} uses {type(v).__name__}; "
-                    "inter-module values must be Connector objects"
-                )
+                ports[str(k)] = v
             else:
                 spec_params[str(k)] = v
 
@@ -1085,7 +1084,7 @@ class _Compiler:
                 if has_hw:
                     raise JitError(
                         f"@module call {getattr(fn, '__name__', fn)!r} must pass the current Circuit as first argument "
-                        "and use Connector values for inter-module ports"
+                        "and bind inter-module ports explicitly (Connector/Wire/Reg/Signal)"
                     )
 
             if kind == "function":
@@ -1698,7 +1697,7 @@ def compile_module(
     """Compile one hardware function into a static pyCircuit Module.
 
     The function is *not executed*; it is parsed via `ast` and lowered into
-    MLIR SCF + PYC ops, then `pyc-compile` will lower SCF into static muxes and
+    MLIR SCF + PYC ops, then `pycc` will lower SCF into static muxes and
     unrolled logic.
 
     Restrictions (prototype):

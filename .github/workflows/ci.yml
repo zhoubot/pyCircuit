@@ -69,10 +69,10 @@ jobs:
             -DMLIR_DIR="$MLIR_DIR" \
             -DPYC_BUILD_CPP_EXAMPLES=OFF
 
-      - name: Build (pyc-compile / pyc-opt)
+      - name: Build (pycc / pyc-opt)
         run: |
           set -euxo pipefail
-          ninja -C build pyc-compile pyc-opt
+          ninja -C build pycc pyc-opt
 
       - name: Regenerate local outputs (examples + janus)
         run: |

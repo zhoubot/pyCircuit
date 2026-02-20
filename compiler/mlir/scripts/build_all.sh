@@ -22,10 +22,9 @@ cmake -G Ninja -S "$PYC_REPO_ROOT/compiler/mlir" -B "$PYC_BUILD_DIR" \
   -DMLIR_DIR="$LLVM_BUILD_DIR/lib/cmake/mlir" \
   -DLLVM_DIR="$LLVM_BUILD_DIR/lib/cmake/llvm"
 
-ninja -C "$PYC_BUILD_DIR" pyc-opt pyc-compile
+ninja -C "$PYC_BUILD_DIR" pyc-opt pycc
 
 echo "Built:"
 echo "  mlir-opt:    $LLVM_BUILD_DIR/bin/mlir-opt"
 echo "  pyc-opt:     $PYC_BUILD_DIR/bin/pyc-opt"
-echo "  pyc-compile: $PYC_BUILD_DIR/bin/pyc-compile"
-
+echo "  pycc: $PYC_BUILD_DIR/bin/pycc"
