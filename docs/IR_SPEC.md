@@ -4,8 +4,7 @@ PYC is an MLIR dialect (`pyc`) intended to be a common, backend-agnostic IR for
 hardware components, with multi-clock modeling and strict ready/valid streaming
 semantics.
 
-For the refactored compiler pipeline and pass-by-pass behavior, see
-`docs/COMPILER_FLOW.md`.
+For the compiler pipeline and pass-by-pass behavior, see `docs/PIPELINE.md`.
 
 ## 1) Types
 
@@ -168,7 +167,7 @@ into a single region:
 
 ## 3) Verilog backend (prototype)
 
-`pyc-compile --emit=verilog` emits Verilog:
+`pycc --emit=verilog` emits Verilog:
 
 - **Combinational ops** are typically emitted as flattened `assign` expressions (netlist style).
 - **Stateful ops** instantiate the corresponding primitives from `runtime/verilog/`:
@@ -180,7 +179,7 @@ into a single region:
   - `pyc.sync_mem_dp` → `pyc_sync_mem_dp` (`runtime/verilog/pyc_sync_mem_dp.v`)
   - `pyc.cdc_sync` → `pyc_cdc_sync` (`runtime/verilog/pyc_cdc_sync.v`)
 
-`pyc-compile` also runs `pyc-fuse-comb`, which enables emission of flattened
+`pycc` also runs `pyc-fuse-comb`, which enables emission of flattened
 Verilog `assign` statements for large purely-combinational regions.
 
 ## 4) Structured control flow (frontend temporary IR)
@@ -190,12 +189,12 @@ The Python AST/JIT frontend may emit a small subset of standard MLIR dialects:
 - `scf.if` / `scf.for` (Structured Control Flow)
 - `arith.constant` of type `index` (loop bounds)
 
-These are **not** part of the stable PYC dialect contract: `pyc-compile` runs
+These are **not** part of the stable PYC dialect contract: `pycc` runs
 `pyc-lower-scf-static` to lower them into static PYC hardware ops:
 
 - `scf.if` → `pyc.mux` networks (both branches are speculated; must be side-effect-free)
 - `scf.for` → fully unrolled logic (bounds must be compile-time constants)
 
 Note: MLIR canonicalization may also introduce `arith.select` during cleanup.
-`pyc-compile` supports `arith.select` in both C++ and Verilog emission, but it
+`pycc` supports `arith.select` in both C++ and Verilog emission, but it
 is not considered part of the stable PYC dialect surface area.

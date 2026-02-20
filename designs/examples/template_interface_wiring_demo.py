@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-from pycircuit import Circuit, compile, meta, module, const
+from pycircuit import Circuit, compile, const, module, spec, wiring
 
 
 @const
 def _pair_spec(m: Circuit, *, width: int):
     _ = m
-    base = meta.struct("pair").field("left", width=width).field("right", width=width).field("drop", width=1).build()
+    base = spec.struct("pair").field("left", width=width).field("right", width=width).field("drop", width=1).build()
     return base.remove_field("drop").rename_field("right", "rhs").select_fields(["left", "rhs"])
 
 
@@ -27,7 +27,7 @@ def build(m: Circuit, *, width: int = 16):
         pair_add,
         name="pair_add0",
         params={"width": int(width)},
-        bind={"in": meta.bind(in_spec, top_in)},
+        bind={"in": wiring.bind(in_spec, top_in)},
     )
 
     m.outputs(

@@ -51,7 +51,7 @@ Fixed-size container (useful for regfiles, bundles of lanes, etc.).
 All combinational primitives have an `eval()` method in C++ and continuous
 assign semantics in Verilog.
 
-Note: the current `pyc-compile` emitters typically **inline** these operations
+Note: the current `pycc` emitters typically **inline** these operations
 as expressions (Verilog `assign` / C++ `Wire<>` operators) to keep generated
 code netlist-like. The `pyc_*` combinational wrappers remain available as a
 stable “template library” layer for hand-written designs or future lowering.
@@ -170,13 +170,12 @@ Prototype-only utilities to help with bring-up and debugging:
 - Tracing: `runtime/cpp/pyc_vcd.hpp` provides a tiny VCD dumper (usable via `Testbench::enableVcd()`).
 - Convenience include: `runtime/cpp/pyc_debug.hpp`.
 
-Example C++ testbench:
-
-- `designs/examples/cpp/tb_fifo.cpp`
+Example testbenches are authored with `@testbench` in Python and lowered by `pycc`
+from the testbench payload embedded in `.pyc`.
 
 ## 7) Generated C++ module-eval caching
 
-When C++ is emitted from MLIR (`pyc-compile --emit=cpp`), hierarchical
+When C++ is emitted from MLIR (`pycc --emit=cpp`), hierarchical
 `pyc.instance` calls include a default-on input-change cache:
 
 - if all instance inputs are unchanged in a parent `eval()` pass, generated

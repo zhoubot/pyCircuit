@@ -1045,10 +1045,39 @@ class Circuit(Module):
         self.assign(d.read(), s.read())
 
     def inputs(self, spec: Any, *, prefix: str | None = None) -> ConnectorBundle | ConnectorStruct:
-        """Declare connector-backed input ports from a meta spec."""
-        from .meta.connect import inputs
+        """Declare connector-backed input ports from a spec."""
+        from .wiring.connect import inputs
 
         return inputs(self, spec, prefix=prefix)
+
+    def io(self, sig: Any, *, prefix: str | None = None) -> ConnectorStruct:
+        """Declare a mixed-direction IO interface from a signature spec.
+
+        Returns a `ConnectorStruct` keyed by signature leaf path (dotted).
+        """
+
+        from .spec.types import SignatureSpec
+
+        if not isinstance(sig, SignatureSpec):
+            raise TypeError(f"io() expects SignatureSpec, got {type(sig).__name__}")
+        pfx = "" if prefix is None else str(prefix)
+        shape = sig.as_struct()
+
+        flat: dict[str, Connector] = {}
+        for leaf in sig.leaves:
+            pname = str(leaf.path).replace(".", "_")
+            port = f"{pfx}{pname}"
+            if leaf.direction == "in":
+                flat[leaf.path] = self.input_connector(port, width=int(leaf.width), signed=bool(leaf.signed))
+                continue
+
+            # Output port placeholder with signedness tracking on the connector.
+            w_sig = super().new_wire(width=int(leaf.width), name=self.scoped_name(port))
+            w = Wire(self, w_sig, signed=bool(leaf.signed), assignable=True)
+            self.output(port, w)
+            flat[leaf.path] = WireConnector(owner=self, name=port, wire=w)
+
+        return ConnectorStruct.from_flat(flat, spec=shape)
 
     def outputs(
         self,
@@ -1057,8 +1086,8 @@ class Circuit(Module):
         *,
         prefix: str | None = None,
     ) -> ConnectorBundle | ConnectorStruct:
-        """Declare connector-backed output ports from a meta spec."""
-        from .meta.connect import outputs
+        """Declare connector-backed output ports from a spec."""
+        from .wiring.connect import outputs
 
         return outputs(self, spec, values, prefix=prefix)
 
@@ -1072,8 +1101,8 @@ class Circuit(Module):
         init: Mapping[str, Any] | Any = 0,
         en: Connector | Signal | int | LiteralValue = 1,
     ) -> ConnectorBundle | ConnectorStruct:
-        """Declare state register connectors from a meta spec."""
-        from .meta.connect import state
+        """Declare state register connectors from a spec."""
+        from .wiring.connect import state
 
         return state(
             self,
@@ -1154,7 +1183,7 @@ class Circuit(Module):
         module_name: str | None = None,
     ) -> ModuleInstanceHandle:
         """Instantiate a module from connector/spec bindings."""
-        from .meta.connect import ports
+        from .wiring.connect import ports
 
         bound_ports = ports(self, bind)
         return self.instance_handle(
@@ -1218,9 +1247,9 @@ class Circuit(Module):
 
         `fn_or_collection` may be:
         - a `@module` function (requires `keys`)
-        - a `meta.Module*Spec` collection (fn/keys inferred)
+        - a `spec.Module*Spec` collection (fn/keys inferred)
         """
-        from .meta.types import (
+        from .spec.types import (
             ModuleDictSpec,
             ModuleFamilySpec,
             ModuleListSpec,
@@ -1295,13 +1324,13 @@ class Circuit(Module):
             raise DesignError(f"instance port {port!r}: ConnectorBundle is not valid for a single callee port")
         if is_connector_struct(v):
             raise DesignError(f"instance port {port!r}: ConnectorStruct is not valid for a single callee port")
-        if not is_connector(v):
+        try:
+            return self.as_connector(v, name=port)
+        except Exception as e:  # noqa: BLE001
             raise DesignError(
-                f"instance port {port!r}: expected Connector, got {type(v).__name__}; "
-                "inter-module links must use input_connector/output_connector/reg_connector/bundle_connector"
-            )
-        c = self.as_connector(v, name=port)
-        return c
+                f"instance port {port!r}: unsupported value {type(v).__name__}; "
+                "expected Connector/Wire/Reg/Signal/int/literal"
+            ) from e
 
     def instance_handle(
         self,
@@ -1310,7 +1339,7 @@ class Circuit(Module):
         name: str,
         params: dict[str, Any] | None = None,
         module_name: str | None = None,
-        **ports: Connector,
+        **ports: Any,
     ) -> ModuleInstanceHandle:
         """Instantiate a specialized sub-module and return a rich instance handle."""
 
@@ -1450,12 +1479,14 @@ class Circuit(Module):
         name: str,
         params: dict[str, Any] | None = None,
         module_name: str | None = None,
-        **ports: Connector,
+        **ports: Any,
     ) -> Connector | ConnectorBundle:
         """Instantiate a specialized sub-module.
 
-        Hard-break v3 contract:
-        - inter-module port bindings must be `Connector`s
+        Port bindings accept `Connector` or raw values that can be coerced by
+        `Circuit.as_connector` (Wire/Reg/Signal/int/literal).
+
+        Returns:
         - single output: return `Connector`
         - multiple outputs: return `ConnectorBundle`
         """
@@ -1651,7 +1682,7 @@ class Circuit(Module):
     ) -> tuple[Wire, Wire, Wire]:
         return self.fifo(domain.clk, domain.rst, in_valid=in_valid, in_data=in_data, out_ready=out_ready, depth=depth)
 
-    def queue(
+    def rv_queue(
         self,
         name: str,
         *,
@@ -1660,13 +1691,13 @@ class Circuit(Module):
         domain: ClockDomain | None = None,
         width: int,
         depth: int,
-    ) -> "Queue":
+    ) -> "RvQueue":
         if domain is not None:
             clk = domain.clk
             rst = domain.rst
         if clk is None or rst is None:
-            raise TypeError("queue() requires either domain=... or both clk=... and rst=...")
-        return Queue(self, name, clk=clk, rst=rst, width=width, depth=depth)
+            raise TypeError("rv_queue() requires either domain=... or both clk=... and rst=...")
+        return RvQueue(self, name, clk=clk, rst=rst, width=width, depth=depth)
 
 
 @dataclass(frozen=True)
@@ -1834,11 +1865,11 @@ class Pop:
     fire: Wire
 
 
-class Queue:
+class RvQueue:
     """Queue-like wrapper over `pyc.fifo` (single-clock, strict ready/valid).
 
     Intended usage (event-ish):
-      q = m.queue("q", domain=dom, width=8, depth=2)
+      q = m.rv_queue("q", domain=dom, width=8, depth=2)
       accepted = q.push(x, when=in_valid)
       p = q.pop(when=out_ready)
       # p.valid / p.data / p.fire
@@ -1851,9 +1882,9 @@ class Queue:
         self.depth = int(depth)
 
         if self.width <= 0:
-            raise ValueError("Queue width must be > 0")
+            raise ValueError("RvQueue width must be > 0")
         if self.depth <= 0:
-            raise ValueError("Queue depth must be > 0")
+            raise ValueError("RvQueue depth must be > 0")
 
         # Input placeholders driven by the high-level API (finalized before emit_mlir()).
         self._in_valid = m.named_wire(f"{self.name}__in_valid", width=1)
@@ -1877,7 +1908,7 @@ class Queue:
 
     def push(self, data: Union[Wire, Reg, Signal, int, LiteralValue], *, when: Union[Wire, Signal, int, LiteralValue] = 1) -> Wire:
         if self._push_bound:
-            raise ValueError("Queue.push() may only be called once per Queue instance (prototype limitation)")
+            raise ValueError("RvQueue.push() may only be called once per RvQueue instance (prototype limitation)")
         self._push_bound = True
         self._push_valid_expr = when
         self._push_data_expr = data
@@ -1887,7 +1918,7 @@ class Queue:
 
     def pop(self, *, when: Union[Wire, Signal, int, LiteralValue] = 1) -> Pop:
         if self._pop_bound:
-            raise ValueError("Queue.pop() may only be called once per Queue instance (prototype limitation)")
+            raise ValueError("RvQueue.pop() may only be called once per RvQueue instance (prototype limitation)")
         self._pop_bound = True
         self._pop_ready_expr = when
         w_when = self._coerce_i1(when, ctx="queue pop when")

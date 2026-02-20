@@ -5,9 +5,6 @@
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/Pass/Pass.h"
 
-#include <string>
-#include <utility>
-
 using namespace mlir;
 
 namespace pyc {
@@ -17,17 +14,15 @@ class CheckFrontendContractPass : public PassWrapper<CheckFrontendContractPass, 
 public:
   MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(CheckFrontendContractPass)
 
-  explicit CheckFrontendContractPass(std::string requiredApiVersion = "v3.4")
-      : requiredApi(std::move(requiredApiVersion)) {}
-
   StringRef getArgument() const override { return "pyc-check-frontend-contract"; }
   StringRef getDescription() const override {
-    return "Verify required frontend API contract attrs are present and match the required version";
+    return "Verify required frontend contract attrs are present and match the supported contract";
   }
 
   void runOnOperation() override {
     ModuleOp module = getOperation();
     bool ok = true;
+
     auto emitModule = [&](llvm::StringRef code, llvm::StringRef msg, llvm::StringRef hint) {
       auto d = module.emitError();
       d << "[" << code << "] " << msg;
@@ -35,15 +30,16 @@ public:
         d << " (hint: " << hint << ")";
     };
 
-    auto modApi = module->getAttrOfType<StringAttr>("pyc.frontend.api");
-    if (!modApi) {
-      emitModule("PYC901", "missing required module attr `pyc.frontend.api`",
-                 "compile with pyCircuit frontend v3.4 and keep module attrs");
+    static constexpr const char *kRequiredContract = "pycircuit";
+    auto modContract = module->getAttrOfType<StringAttr>("pyc.frontend.contract");
+    if (!modContract) {
+      emitModule("PYC901", "missing required module attr `pyc.frontend.contract`",
+                 "regenerate .pyc with the current pyCircuit frontend and keep module attrs intact");
       ok = false;
-    } else if (modApi.getValue() != requiredApi) {
+    } else if (modContract.getValue() != kRequiredContract) {
       auto d = module.emitError();
-      d << "[PYC902] frontend api mismatch: expected `" << requiredApi << "`, got `" << modApi.getValue()
-        << "` (hint: regenerate .pyc with matching frontend API epoch)";
+      d << "[PYC902] frontend contract mismatch: expected `" << kRequiredContract << "`, got `"
+        << modContract.getValue() << "` (hint: regenerate .pyc with matching toolchain)";
       ok = false;
     }
 
@@ -60,17 +56,24 @@ public:
         return attr;
       };
 
-      auto api = checkStrAttr("pyc.frontend.api", "PYC903", "regenerate function with pyCircuit v3.4 frontend");
-      auto kind = checkStrAttr("pyc.kind", "PYC904", "frontend must stamp symbol kind metadata");
-      auto inl = checkStrAttr("pyc.inline", "PYC905", "frontend must stamp inline metadata");
-      (void)checkStrAttr("pyc.params", "PYC906", "frontend must stamp canonical specialization params");
-      (void)checkStrAttr("pyc.base", "PYC907", "frontend must stamp canonical base symbol name");
+      auto checkArrAttr = [&](StringRef name, llvm::StringRef code, llvm::StringRef hint) -> ArrayAttr {
+        auto attr = f->getAttrOfType<ArrayAttr>(name);
+        if (!attr) {
+          auto d = f.emitError();
+          d << "[" << code << "] missing required func attr `" << name << "`";
+          if (!hint.empty())
+            d << " (hint: " << hint << ")";
+          ok = false;
+        }
+        return attr;
+      };
 
-      if (api && api.getValue() != requiredApi) {
-        f.emitError() << "[PYC908] func frontend api mismatch: expected `" << requiredApi << "`, got `"
-                      << api.getValue() << "` (hint: regenerate .pyc with matching frontend API epoch)";
-        ok = false;
-      }
+      auto kind = checkStrAttr("pyc.kind", "PYC903", "frontend must stamp symbol kind metadata");
+      auto inl = checkStrAttr("pyc.inline", "PYC904", "frontend must stamp inline metadata");
+      (void)checkStrAttr("pyc.params", "PYC905", "frontend must stamp canonical specialization params");
+      (void)checkStrAttr("pyc.base", "PYC906", "frontend must stamp canonical base symbol name");
+      (void)checkArrAttr("arg_names", "PYC907", "frontend must stamp canonical port names");
+      (void)checkArrAttr("result_names", "PYC908", "frontend must stamp canonical port names");
 
       if (kind) {
         auto k = kind.getValue();
@@ -94,17 +97,15 @@ public:
     if (!ok)
       signalPassFailure();
   }
-
-private:
-  std::string requiredApi;
 };
 
 } // namespace
 
-std::unique_ptr<::mlir::Pass> createCheckFrontendContractPass(std::string requiredApi) {
-  return std::make_unique<CheckFrontendContractPass>(std::move(requiredApi));
+std::unique_ptr<::mlir::Pass> createCheckFrontendContractPass() {
+  return std::make_unique<CheckFrontendContractPass>();
 }
 
 static PassRegistration<CheckFrontendContractPass> pass;
 
 } // namespace pyc
+

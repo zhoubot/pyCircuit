@@ -17,7 +17,7 @@ PYTHONPATH=compiler/frontend python3 -m pycircuit.cli emit \
   designs/examples/calculator/calculator.py \
   -o .pycircuit_out/examples/calculator/calculator.pyc
 
-build/bin/pyc-compile \
+build/bin/pycc \
   .pycircuit_out/examples/calculator/calculator.pyc \
   --emit=cpp \
   -o .pycircuit_out/examples/calculator/calculator_gen.hpp

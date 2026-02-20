@@ -11,6 +11,7 @@ __pycache__/
 .Python
 build/
 build-*/
+compiler/mlir/build*/
 develop-eggs/
 dist/
 downloads/
@@ -222,6 +223,7 @@ __marimo__/
 
 # pyCircuit generated outputs (local artifacts only; never checked in)
 .pycircuit_out/
+**/generated/
 designs/**/generated/
 designs/examples/generated/**/verilator/
 designs/janus/generated/

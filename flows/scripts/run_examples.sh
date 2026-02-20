@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Run all repo examples through emit + pyc-compile (cpp) to sanity-check the
+# Run all repo examples through emit + pycc (cpp) to sanity-check the
 # compiler/codegen pipeline.
 
 source "$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
-pyc_find_pyc_compile
+pyc_find_pycc
 
 PYTHONPATH_VAL="$(pyc_pythonpath)"
 EX_DIR="${PYC_ROOT_DIR}/designs/examples"
@@ -14,7 +14,7 @@ if [[ ! -d "${EX_DIR}" ]]; then
   pyc_die "examples dir not found: ${EX_DIR}"
 fi
 
-pyc_log "using pyc-compile: ${PYC_COMPILE}"
+pyc_log "using pycc: ${PYCC}"
 
 pyc_log "running strict API hygiene gate"
 python3 "${PYC_ROOT_DIR}/flows/tools/check_api_hygiene.py" \
@@ -50,12 +50,12 @@ for ex in "${EX_DIR}"/*.py; do
   fi
 
   pyc_log "[${count}] compile(cpp) ${bn}"
-  if ! "${PYC_COMPILE}" "${pyc_file}" \
+  if ! "${PYCC}" "${pyc_file}" \
       --emit=cpp \
       --cpp-split=module \
       --out-dir="${cpp_dir}" \
       --logic-depth=64; then
-    pyc_warn "pyc-compile failed: ${bn}"
+    pyc_warn "pycc failed: ${bn}"
     fail=1
     continue
   fi
@@ -66,6 +66,31 @@ for ex in "${EX_DIR}"/*.py; do
     fail=1
   fi
 
+done
+
+# Project build flow smoke checks (multi-.pyc + parallel pycc + CMake/Ninja).
+for bex in counter_tb huge_hierarchy_stress; do
+  ex="${EX_DIR}/${bex}.py"
+  [[ -f "${ex}" ]] || continue
+  count=$((count+1))
+  out_root="$(pyc_out_root)/example-build-smoke/${bex}"
+  rm -rf "${out_root}" >/dev/null 2>&1 || true
+  mkdir -p "${out_root}"
+  pyc_log "[${count}] build ${bex}"
+  if ! PYTHONPATH="${PYTHONPATH_VAL}" python3 -m pycircuit.cli build \
+      "${ex}" \
+      --out-dir "${out_root}" \
+      --target cpp \
+      --jobs "${PYC_EXAMPLE_JOBS:-4}" \
+      --logic-depth 64; then
+    pyc_warn "build failed: ${bex}"
+    fail=1
+    continue
+  fi
+  if [[ ! -f "${out_root}/project_manifest.json" ]]; then
+    pyc_warn "missing project_manifest.json: ${bex}"
+    fail=1
+  fi
 done
 
 if [[ "${fail}" -ne 0 ]]; then

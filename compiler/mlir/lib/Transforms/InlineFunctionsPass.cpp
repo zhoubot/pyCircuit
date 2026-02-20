@@ -69,6 +69,8 @@ struct InlineFunctionsPass : public PassWrapper<InlineFunctionsPass, OperationPa
     while (changed) {
       changed = false;
       for (func::FuncOp caller : mod.getOps<func::FuncOp>()) {
+        if (caller.getBody().empty())
+          continue;
         for (Operation &op : llvm::make_early_inc_range(caller.getBody().front())) {
           auto inst = dyn_cast<pyc::InstanceOp>(op);
           if (!inst)

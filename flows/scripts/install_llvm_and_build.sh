@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 安装 LLVM（含 MLIR）+ 构建 pyCircuit 的 pyc-compile
+# 安装 LLVM（含 MLIR）+ 构建 pyCircuit 的 pycc
 # 在终端中执行: bash flows/scripts/install_llvm_and_build.sh
 
 set -euo pipefail
@@ -20,7 +20,7 @@ else
   pyc_die "未找到 llvm-config，请确认 brew install llvm 已成功完成"
 fi
 
-echo "[3/3] 构建 pyc-compile..."
+echo "[3/3] 构建 pycc..."
 cd "${ROOT_DIR}"
 flows/scripts/pyc build
 

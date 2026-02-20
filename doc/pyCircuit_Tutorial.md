@@ -716,8 +716,8 @@ mlir_text = circuit.emit_mlir()
 ### 10.2 降级到 Verilog / C++
 
 ```bash
-pyc-compile my_module.pyc --emit=cpp -o my_module_gen.hpp
-pyc-compile my_module.pyc --emit=verilog -o my_module.v
+pycc my_module.pyc --emit=cpp -o my_module_gen.hpp
+pycc my_module.pyc --emit=verilog -o my_module.v
 ```
 
 ### 10.3 C++ Testbench

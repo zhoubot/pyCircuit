@@ -1,7 +1,0 @@
-{
-	"InstallScripts" : 
-	[
-		"/Users/zhoubot/pyCircuit/compiler/mlir/build2/cmake_install.cmake"
-	],
-	"Parallel" : false
-}

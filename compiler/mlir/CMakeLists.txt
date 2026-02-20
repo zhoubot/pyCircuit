@@ -97,7 +97,7 @@ target_link_libraries(pyc_transforms PUBLIC
 )
 
 # pyc-opt requires MLIRRegisterAllPasses; Homebrew LLVM may not export it.
-# Build script uses "ninja pyc-compile" only so pyc-opt is optional; if you run
+# Build script uses "ninja pycc" only so pyc-opt is optional; if you run
 # "ninja" (all), pyc-opt may fail to link on some systems.
 if(TARGET MLIRRegisterAllPasses)
   add_executable(pyc-opt EXCLUDE_FROM_ALL tools/pyc-opt.cpp)
@@ -119,17 +119,17 @@ if(TARGET MLIRRegisterAllPasses)
   )
   set(PYC_OPT_BUILT 1)
 else()
-  message(STATUS "MLIRRegisterAllPasses not found; skipping pyc-opt (pyc-compile only)")
+  message(STATUS "MLIRRegisterAllPasses not found; skipping pyc-opt (pycc only)")
 endif()
 
-add_executable(pyc-compile tools/pyc-compile.cpp lib/Emit/VerilogEmitter.cpp lib/Emit/CppEmitter.cpp)
-llvm_update_compile_flags(pyc-compile)
-set_target_properties(pyc-compile PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
-target_include_directories(pyc-compile PRIVATE
+add_executable(pycc tools/pycc.cpp lib/Emit/VerilogEmitter.cpp lib/Emit/CppEmitter.cpp)
+llvm_update_compile_flags(pycc)
+set_target_properties(pycc PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
+target_include_directories(pycc PRIVATE
   "${PYC_SOURCE_DIR}/include"
   "${PYC_BINARY_DIR}/include"
 )
-target_link_libraries(pyc-compile PRIVATE
+target_link_libraries(pycc PRIVATE
   pyc_dialect
   pyc_transforms
   MLIRArithDialect
@@ -145,7 +145,7 @@ target_link_libraries(pyc-compile PRIVATE
 )
 
 # Install binaries for packaging / reuse.
-set(PYC_INSTALL_TARGETS pyc-compile)
+set(PYC_INSTALL_TARGETS pycc)
 if(PYC_OPT_BUILT)
   list(APPEND PYC_INSTALL_TARGETS pyc-opt)
 endif()

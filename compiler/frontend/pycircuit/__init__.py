@@ -1,7 +1,8 @@
 from . import ct
-from . import meta
-from .blocks import Cache, FIFO, IssueQueue, Mem2Port, Picker, Queue, RegFile, SRAM
-from .component import component
+from . import lib
+from . import logic
+from . import spec
+from . import wiring
 from .connectors import (
     Connector,
     ConnectorBundle,
@@ -11,49 +12,47 @@ from .connectors import (
     RegConnector,
     WireConnector,
 )
-from .design import const, function, module
-from .hw import Bundle, Circuit, ClockDomain, Pop, Queue as QueuePrimitive, Reg, Vec, Wire, cat, unsigned
+from .design import const, function, module, testbench as _testbench_decorator
+from .hw import Bundle, Circuit, ClockDomain, Pop, Reg, Vec, Wire, cat, unsigned
 from .jit import JitError, compile
 from .literals import LiteralValue, S, U, s, u
 from .tb import Tb, sva
+from .testbench import TestbenchProgram
+
+testbench = _testbench_decorator
 
 __all__ = [
     "Connector",
     "ConnectorBundle",
     "ConnectorStruct",
     "Bundle",
-    "Cache",
     "Circuit",
     "ClockDomain",
     "const",
-    "FIFO",
-    "IssueQueue",
     "JitError",
     "LiteralValue",
-    "Mem2Port",
     "ModuleInstanceHandle",
     "ModuleCollectionHandle",
-    "Picker",
     "Pop",
-    "Queue",
-    "QueuePrimitive",
     "Reg",
     "RegConnector",
-    "RegFile",
-    "SRAM",
     "S",
     "Tb",
+    "TestbenchProgram",
     "U",
     "Vec",
     "Wire",
     "WireConnector",
     "cat",
     "compile",
-    "component",
     "ct",
     "function",
+    "lib",
+    "logic",
     "module",
-    "meta",
+    "spec",
+    "testbench",
+    "wiring",
     "s",
     "sva",
     "u",

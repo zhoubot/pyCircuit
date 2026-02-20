@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from pycircuit import Circuit, compile, ct, meta, module, const, u
+from pycircuit import Circuit, compile, const, ct, module, spec, u
 
 
-@meta.valueclass
+@spec.valueclass
 class LaneCfg:
     lanes: int
     lane_width: int

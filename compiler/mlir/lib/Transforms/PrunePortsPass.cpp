@@ -16,7 +16,7 @@ struct PrunePortsPass : public PassWrapper<PrunePortsPass, OperationPass<ModuleO
 
   StringRef getArgument() const override { return "pyc-prune-ports"; }
   StringRef getDescription() const override {
-    return "Prune unused func arguments (ports) and update call sites (interface-changing; off by default in pyc-compile)";
+    return "Prune unused func arguments (ports) and update call sites (interface-changing; off by default in pycc)";
   }
 
   void runOnOperation() override {
@@ -106,4 +106,3 @@ std::unique_ptr<::mlir::Pass> createPrunePortsPass() { return std::make_unique<P
 static PassRegistration<PrunePortsPass> pass;
 
 } // namespace pyc
-

@@ -19,18 +19,18 @@ def _repo_root() -> Path:
 
 
 def _detect_pyc_compile(root: Path) -> Path:
-    env = os.environ.get("PYC_COMPILE")
+    env = os.environ.get("PYCC")
     if env:
         p = Path(env)
         if p.is_file() and os.access(p, os.X_OK):
             return p
-        raise SystemExit(f"PYC_COMPILE is set but not executable: {p}")
+        raise SystemExit(f"PYCC is set but not executable: {p}")
 
     candidates = [
-        root / "build" / "bin" / "pyc-compile",
-        root / "compiler" / "mlir" / "build" / "bin" / "pyc-compile",
-        root / "compiler" / "mlir" / "build2" / "bin" / "pyc-compile",
-        root / "build-top" / "bin" / "pyc-compile",
+        root / "build" / "bin" / "pycc",
+        root / "compiler" / "mlir" / "build" / "bin" / "pycc",
+        root / "compiler" / "mlir" / "build2" / "bin" / "pycc",
+        root / "build-top" / "bin" / "pycc",
     ]
     best: Path | None = None
     best_mtime = -1.0
@@ -43,14 +43,18 @@ def _detect_pyc_compile(root: Path) -> Path:
     if best is not None:
         return best
 
-    found = shutil.which("pyc-compile")
+    found = shutil.which("pycc")
     if found:
         return Path(found)
-    raise SystemExit("missing pyc-compile (set PYC_COMPILE=... or build it first)")
+    raise SystemExit("missing pycc (set PYCC=... or build it first)")
 
 
 def _pythonpath(root: Path) -> str:
-    parts = [str(root / "compiler" / "frontend"), str(root / "designs")]
+    parts = [
+        str(root / "compiler" / "frontend"),
+        str(root / "designs"),
+        str(root / "contrib" / "linx" / "designs"),
+    ]
     old = os.environ.get("PYTHONPATH")
     if old:
         parts.append(old)
@@ -142,7 +146,7 @@ def _run_linx_case(
             "-m",
             "pycircuit.cli",
             "emit",
-            "designs/examples/linx_cpu_pyc/linx_cpu_pyc.py",
+            "contrib/linx/designs/examples/linx_cpu_pyc/linx_cpu_pyc.py",
             "--param",
             "mem_bytes=1048576",
             "-o",
@@ -173,7 +177,7 @@ def _run_linx_case(
         "--manifest",
         str(manifest_path),
         "--tb",
-        str(root / "designs" / "examples" / "linx_cpu_pyc" / "tb_linx_cpu_pyc.cpp"),
+        str(root / "contrib" / "linx" / "designs" / "examples" / "linx_cpu_pyc" / "tb_linx_cpu_pyc.cpp"),
         "--out",
         str(tb_path),
         "--profile",
@@ -190,7 +194,7 @@ def _run_linx_case(
 
     env_run = os.environ.copy()
     env_run.setdefault("PYC_KONATA", "0")
-    perf_memh = str(root / "designs" / "examples" / "linx_cpu" / "programs" / "test_csel_fixed.memh")
+    perf_memh = str(root / "contrib" / "linx" / "designs" / "examples" / "linx_cpu" / "programs" / "test_csel_fixed.memh")
     sim_s, sim_out = _run(
         [
             str(tb_path),
@@ -241,9 +245,9 @@ def _run_linxcore_case(
 ) -> dict[str, Any]:
     out_dir = root / ".pycircuit_out" / "perf" / "linxcore"
     out_dir.mkdir(parents=True, exist_ok=True)
-    bench_build = root / "designs" / "linxcore" / "tools" / "image" / "build_linxisa_benchmarks_memh_compat.sh"
-    gen_update = root / "designs" / "linxcore" / "tools" / "generate" / "update_generated_linxcore.sh"
-    run_cpp = root / "designs" / "linxcore" / "tools" / "generate" / "run_linxcore_top_cpp.sh"
+    bench_build = root / "contrib" / "linx" / "designs" / "linxcore" / "tools" / "image" / "build_linxisa_benchmarks_memh_compat.sh"
+    gen_update = root / "contrib" / "linx" / "designs" / "linxcore" / "tools" / "generate" / "update_generated_linxcore.sh"
+    run_cpp = root / "contrib" / "linx" / "designs" / "linxcore" / "tools" / "generate" / "run_linxcore_top_cpp.sh"
 
     def _skipped(reason: str) -> dict[str, Any]:
         return {
@@ -267,7 +271,7 @@ def _run_linxcore_case(
             return _skipped(f"missing script: {required}")
 
     env_run = os.environ.copy()
-    env_run["PYC_COMPILE"] = str(pyc_compile)
+    env_run["PYCC"] = str(pyc_compile)
     env_run["PYC_LOGIC_DEPTH"] = str(int(logic_depth))
     env_run.setdefault("PYC_KONATA", "0")
     env_run["PYC_MAX_CYCLES"] = str(int(perf_max_cycles))

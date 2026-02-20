@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-from pycircuit import Circuit, compile, meta, module, const, u
+from pycircuit import Circuit, compile, const, module, spec, u, wiring
 
 
 @const
 def _lane_in_spec(m: Circuit, *, width: int):
     _ = m
-    return meta.struct("lane_in").field("payload.data", width=width).field("meta.bias", width=width).build()
+    return spec.struct("lane_in").field("payload.data", width=width).field("meta.bias", width=width).build()
 
 
 @const
@@ -41,7 +41,7 @@ def build(m: Circuit, *, width: int = 32, lanes: int = 8):
     seed = m.input("seed", width=width)
 
     in_spec = _lane_in_spec(m, width=width)
-    family = meta.module_family("lane_family", module=_lane, params={"width": int(width)})
+    family = spec.module_family("lane_family", module=_lane, params={"width": int(width)})
     lane_vec = family.vector(max(1, int(lanes)), name="lane_vec")
 
     per_lane: dict[str, dict[str, object]] = {}
@@ -51,7 +51,7 @@ def build(m: Circuit, *, width: int = 32, lanes: int = 8):
             "payload.data": (seed + u(width, i))[0:width],
             "meta.bias": u(width, i + 1),
         }
-        per_lane[key] = {"in": meta.bind(in_spec, lane_in)}
+        per_lane[key] = {"in": wiring.bind(in_spec, lane_in)}
 
     insts = m.array(
         lane_vec,
