@@ -91,5 +91,8 @@ def build(m: Circuit) -> None:
     m.output("op_pending", op)
 
 
+build.__pycircuit_name__ = "calculator"
+
+
 if __name__ == "__main__":
     print(compile(build, name="calculator").emit_mlir())

@@ -244,7 +244,8 @@ static LogicalResult emitPrimitivesFile(llvm::StringRef outPath, llvm::StringRef
 
   std::string buf;
   llvm::raw_string_ostream ss(buf);
-  ss << "// pyCircuit Verilog primitives (concatenated)\n\n";
+  ss << "// pyCircuit Verilog primitives (concatenated)\n";
+  ss << "/* verilator lint_off DECLFILENAME */\n\n";
   if (targetFpga)
     ss << "`define PYC_TARGET_FPGA 1\n\n";
   for (const char *name : kFiles) {
@@ -258,6 +259,7 @@ static LogicalResult emitPrimitivesFile(llvm::StringRef outPath, llvm::StringRef
     ss << "// --- " << name << "\n";
     ss << fileOrErr->get()->getBuffer() << "\n\n";
   }
+  ss << "/* verilator lint_on DECLFILENAME */\n";
   ss.flush();
   return writeFile(outPath, buf);
 }

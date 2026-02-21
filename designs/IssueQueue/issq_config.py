@@ -69,18 +69,12 @@ def _operand_spec(m: Circuit, cfg: IqCfg):
 
 @const
 def _uop_spec(m: Circuit, cfg: IqCfg):
-    _ = m
+    op_spec = _operand_spec(m, cfg)
     return (
         spec.struct("iq_uop")
-        .field("src0.valid", width=1)
-        .field("src0.ptag", width=int(cfg.ptag_width))
-        .field("src0.ready", width=1)
-        .field("src1.valid", width=1)
-        .field("src1.ptag", width=int(cfg.ptag_width))
-        .field("src1.ready", width=1)
-        .field("dst.valid", width=1)
-        .field("dst.ptag", width=int(cfg.ptag_width))
-        .field("dst.ready", width=1)
+        .nested("src0", op_spec)
+        .nested("src1", op_spec)
+        .nested("dst", op_spec)
         .field("payload", width=int(cfg.payload_width))
         .build()
     )
@@ -88,20 +82,11 @@ def _uop_spec(m: Circuit, cfg: IqCfg):
 
 @const
 def _entry_spec(m: Circuit, cfg: IqCfg):
-    _ = m
+    uop = _uop_spec(m, cfg)
     return (
         spec.struct("iq_entry")
         .field("valid", width=1)
-        .field("uop.src0.valid", width=1)
-        .field("uop.src0.ptag", width=int(cfg.ptag_width))
-        .field("uop.src0.ready", width=1)
-        .field("uop.src1.valid", width=1)
-        .field("uop.src1.ptag", width=int(cfg.ptag_width))
-        .field("uop.src1.ready", width=1)
-        .field("uop.dst.valid", width=1)
-        .field("uop.dst.ptag", width=int(cfg.ptag_width))
-        .field("uop.dst.ready", width=1)
-        .field("uop.payload", width=int(cfg.payload_width))
+        .nested("uop", uop)
         .build()
     )
 
@@ -423,4 +408,3 @@ def _tb_step(
         issued_total=int(state.issued_total) + issue_count,
     )
     return next_state, accepted
-

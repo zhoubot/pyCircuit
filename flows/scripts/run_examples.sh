@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Run all repo examples through emit + pycc (cpp) to sanity-check the
+# Run all folderized examples through emit + pycc (cpp) to sanity-check the
 # compiler/codegen pipeline.
 
 source "$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
@@ -9,6 +9,7 @@ pyc_find_pycc
 
 PYTHONPATH_VAL="$(pyc_pythonpath)"
 EX_DIR="${PYC_ROOT_DIR}/designs/examples"
+DISCOVER="${PYC_ROOT_DIR}/flows/tools/discover_examples.py"
 
 if [[ ! -d "${EX_DIR}" ]]; then
   pyc_die "examples dir not found: ${EX_DIR}"
@@ -26,14 +27,8 @@ python3 "${PYC_ROOT_DIR}/flows/tools/check_api_hygiene.py" \
 fail=0
 count=0
 
-for ex in "${EX_DIR}"/*.py; do
-  [[ -f "${ex}" ]] || continue
-  bn="$(basename "${ex}" .py)"
-
-  # Skip package init modules; examples should be runnable design entrypoints.
-  if [[ "${bn}" == "__init__" ]]; then
-    continue
-  fi
+while IFS=$'\t' read -r bn design _tb _cfg _tier; do
+  [[ -n "${bn}" ]] || continue
 
   count=$((count+1))
   out_root="$(pyc_out_root)/example-smoke/${bn}"
@@ -43,7 +38,7 @@ for ex in "${EX_DIR}"/*.py; do
   cpp_dir="${out_root}/cpp"
 
   pyc_log "[${count}] emit ${bn}"
-  if ! PYTHONPATH="${PYTHONPATH_VAL}" python3 -m pycircuit.cli emit "${ex}" -o "${pyc_file}"; then
+  if ! PYTHONPATH="${PYTHONPATH_VAL}" python3 -m pycircuit.cli emit "${design}" -o "${pyc_file}"; then
     pyc_warn "emit failed: ${bn}"
     fail=1
     continue
@@ -66,11 +61,11 @@ for ex in "${EX_DIR}"/*.py; do
     fail=1
   fi
 
-done
+done < <(python3 "${DISCOVER}" --root "${EX_DIR}" --tier all --format tsv)
 
 # Project build flow smoke checks (multi-.pyc + parallel pycc + CMake/Ninja).
-for bex in counter_tb huge_hierarchy_stress; do
-  ex="${EX_DIR}/${bex}.py"
+for bex in counter huge_hierarchy_stress; do
+  ex="${EX_DIR}/${bex}/tb_${bex}.py"
   [[ -f "${ex}" ]] || continue
   count=$((count+1))
   out_root="$(pyc_out_root)/example-build-smoke/${bex}"

@@ -81,5 +81,8 @@ def build(m: Circuit, clk_freq: int = 50_000_000) -> None:
     m.output("colon_blink", blink)
 
 
+build.__pycircuit_name__ = "digital_clock"
+
+
 if __name__ == "__main__":
     print(compile(build, name="digital_clock", clk_freq=50_000_000).emit_mlir())

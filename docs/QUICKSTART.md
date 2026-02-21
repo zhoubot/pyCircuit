@@ -24,7 +24,7 @@ Emit one module:
 
 ```bash
 PYTHONPATH=/Users/zhoubot/pyCircuit/compiler/frontend \
-python3 -m pycircuit.cli emit /Users/zhoubot/pyCircuit/designs/examples/counter.py -o /tmp/counter.pyc
+python3 -m pycircuit.cli emit /Users/zhoubot/pyCircuit/designs/examples/counter/counter.py -o /tmp/counter.pyc
 ```
 
 Compile to C++:
@@ -38,9 +38,8 @@ Build a multi-module project with a testbench:
 ```bash
 PYTHONPATH=/Users/zhoubot/pyCircuit/compiler/frontend \
 python3 -m pycircuit.cli build \
-  /Users/zhoubot/pyCircuit/designs/examples/counter_tb.py \
+  /Users/zhoubot/pyCircuit/designs/examples/counter/tb_counter.py \
   --out-dir /tmp/counter_build \
   --target both \
   --jobs 8
 ```
-

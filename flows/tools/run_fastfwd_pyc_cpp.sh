@@ -47,7 +47,7 @@ Tracing:
   PYC_TRACE=1        write a text log
   PYC_VCD=1          write a VCD
   PYC_KONATA=1       write a Konata trace log
-  PYC_TRACE_DIR=...  output directory (default: .pycircuit_out/examples/fastfwd_pyc)
+  PYC_TRACE_DIR=...  output directory (default: .pycircuit_out/examples/fastfwd)
 
 Stats:
   --stats            also emit Verilog and print basic size proxies (regs/fifos/wires/assigns)
@@ -68,7 +68,7 @@ cd "${ROOT_DIR}"
 
 python3 "${ROOT_DIR}/flows/tools/check_api_hygiene.py" \
   compiler/frontend/pycircuit \
-  designs/examples/fastfwd_pyc \
+  designs/examples/fastfwd \
   docs \
   README.md
 
@@ -99,18 +99,18 @@ if (( ${#PARAMS[@]} )); then
   done
 fi
 
-emit_cmd=(python3 -m pycircuit.cli emit designs/examples/fastfwd_pyc/fastfwd_pyc.py)
+emit_cmd=(python3 -m pycircuit.cli emit designs/examples/fastfwd/fastfwd.py)
 if (( ${#EMIT_ARGS[@]} )); then
   emit_cmd+=("${EMIT_ARGS[@]}")
 fi
-emit_cmd+=(-o "${WORK_DIR}/fastfwd_pyc.pyc")
+emit_cmd+=(-o "${WORK_DIR}/fastfwd.pyc")
 
 PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="$(pyc_pythonpath)" "${emit_cmd[@]}"
 
 CPP_OUT_DIR="${WORK_DIR}/cpp"
-"${PYCC}" "${WORK_DIR}/fastfwd_pyc.pyc" --emit=cpp --sim-mode=cpp-only --out-dir "${CPP_OUT_DIR}" --cpp-split=module
+"${PYCC}" "${WORK_DIR}/fastfwd.pyc" --emit=cpp --sim-mode=cpp-only --out-dir "${CPP_OUT_DIR}" --cpp-split=module
 if (( STATS )); then
-  "${PYCC}" "${WORK_DIR}/fastfwd_pyc.pyc" --emit=verilog -o "${WORK_DIR}/fastfwd_pyc.v"
+  "${PYCC}" "${WORK_DIR}/fastfwd.pyc" --emit=verilog -o "${WORK_DIR}/fastfwd.v"
 fi
 
 FASTFWD_TOTAL_ENG="$(( 4 * ENG_PER_LANE ))"
@@ -137,7 +137,7 @@ if (( STATS )); then
   bkpr="$(echo "${tb_out}" | sed -n 's/.*bkpr=\([0-9][0-9]*\.[0-9][0-9]*\)%.*/\1/p')"
 
   stats="$(
-    python3 - "${WORK_DIR}/fastfwd_pyc.v" <<'PY'
+    python3 - "${WORK_DIR}/fastfwd.v" <<'PY'
 import re
 import sys
 from pathlib import Path
